@@ -1,0 +1,14 @@
+{
+  "name": "uptc-music-api",
+  "version": "1.0.0",
+  "description": "API para sistema de votación musical UPTC",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "firebase-admin": "^11.5.0",
+    "spotify-web-api-node": "^5.0.2",
+    "cors": "^2.8.5"
+  }
+}
