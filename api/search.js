@@ -9,6 +9,7 @@ const spotifyApi = new SpotifyWebApi({
 const allowedOrigins = [
   "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev",
   "https://music-uptc-sogamoso.vercel.app",
+  "https://sebastianvega4.github.io",
   "http://localhost:4200",
 ];
 
