@@ -23,8 +23,9 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  const clientIP =
-    req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+  const clientIP = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+                   req.headers['x-real-ip'] || 
+                   req.connection.remoteAddress;
 
   try {
     // POST: Registrar un nuevo voto
