@@ -13,12 +13,21 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
+// Lista de orígenes permitidos
+const allowedOrigins = [
+  "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev",
+  "https://music-uptc-sogamoso.vercel.app",
+  "http://localhost:4200",
+];
+
 module.exports = async (req, res) => {
   // CONFIGURACIÓN CORS MEJORADA
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
-  );
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigins[0]);
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
