@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "vercel dev"
+    "dev": "vercel dev",
+    "vercel-build": "npm install"
   },
   "dependencies": {
     "firebase-admin": "^11.5.0",
