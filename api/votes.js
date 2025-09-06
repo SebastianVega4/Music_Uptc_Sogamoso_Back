@@ -14,18 +14,26 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-  // Habilitar CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  // CONFIGURACIÓN CORS MEJORADA
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
+  );
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  const clientIP = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
-                   req.headers['x-real-ip'] || 
-                   req.connection.remoteAddress;
+  const clientIP =
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.headers["x-real-ip"] ||
+    req.connection.remoteAddress;
 
   try {
     // POST: Registrar un nuevo voto
@@ -78,7 +86,6 @@ module.exports = async (req, res) => {
         .orderBy("votes", "desc")
         .limit(50)
         .get();
-
       const songs = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
@@ -127,7 +134,6 @@ module.exports = async (req, res) => {
           .collection("votes")
           .where("trackId", "==", trackId)
           .get();
-
         const batch = db.batch();
         votesSnapshot.docs.forEach((doc) => {
           batch.delete(doc.ref);

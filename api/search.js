@@ -18,10 +18,10 @@ async function getAccessToken() {
 }
 
 module.exports = async (req, res) => {
-  // Habilitar CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Origin", "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -34,17 +34,13 @@ module.exports = async (req, res) => {
 
   const { q } = req.query;
   if (!q) {
-    return res
-      .status(400)
-      .json({ error: 'El parámetro de búsqueda "q" es requerido.' });
+    return res.status(400).json({ error: 'El parámetro de búsqueda "q" es requerido.' });
   }
 
   try {
     const tokenSuccess = await getAccessToken();
     if (!tokenSuccess) {
-      return res
-        .status(500)
-        .json({ error: "Error de autenticación con Spotify." });
+      return res.status(500).json({ error: "Error de autenticación con Spotify." });
     }
 
     const searchResults = await spotifyApi.searchTracks(q, { limit: 10 });
@@ -53,9 +49,7 @@ module.exports = async (req, res) => {
       name: track.name,
       artists: track.artists.map((artist) => artist.name),
       album: track.album.name,
-      image:
-        track.album.images[0]?.url ||
-        "https://placehold.co/300x300?text=No+Image",
+      image: track.album.images[0]?.url || "https://placehold.co/300x300?text=No+Image",
       preview_url: track.preview_url,
       duration_ms: track.duration_ms,
       uri: track.uri,
