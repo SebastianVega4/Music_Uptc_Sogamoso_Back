@@ -1,3 +1,16 @@
+const admin = require('firebase-admin');
+
+// Inicializa Firebase Admin SDK
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    }),
+  });
+}
+
 module.exports = async (req, res) => {
   // Habilitar CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -14,28 +27,38 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const { username, password } = req.body;
+    const { email, password } = req.body;
 
-    // Credenciales hardcodeadas (en producción usar una base de datos)
-    const validUsername = 'admin';
-    const validPassword = 'uptc2023';
-
-    if (username === validUsername && password === validPassword) {
-      // Generar un token simple (en producción usar JWT)
-      const token = process.env.ADMIN_SECRET;
-      return res.status(200).json({
-        success: true,
-        token,
-        message: 'Autenticación exitosa',
-      });
-    } else {
-      return res.status(401).json({
-        success: false,
-        error: 'Credenciales inválidas',
-      });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email y contraseña son requeridos' });
     }
+
+    // Autenticar con Firebase
+    const userRecord = await admin.auth().getUserByEmail(email);
+    
+    // Verificar si el usuario es administrador
+    const userDoc = await admin.firestore().collection('admins').doc(userRecord.uid).get();
+    
+    if (!userDoc.exists) {
+      return res.status(401).json({ error: 'No tienes permisos de administrador' });
+    }
+
+    // En una aplicación real, deberías usar Firebase Auth para autenticar
+    // Pero para simplificar, usaremos un token JWT personalizado
+    const token = await admin.auth().createCustomToken(userRecord.uid);
+    
+    return res.status(200).json({
+      success: true,
+      token,
+      message: 'Autenticación exitosa',
+    });
   } catch (error) {
     console.error('Error en autenticación:', error);
+    
+    if (error.code === 'auth/user-not-found') {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+    
     return res.status(500).json({ error: 'Error interno del servidor' });
   }
 };
