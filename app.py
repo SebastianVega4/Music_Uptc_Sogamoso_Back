@@ -91,11 +91,6 @@ def handle_auth():
             
         # Autenticar con Firebase
         user = auth.get_user_by_email(email)
-        
-        # Verificar si es admin
-        admin_doc = db.collection('admins').document(user.uid).get()
-        if not admin_doc.exists:
-            return jsonify({"error": "No tienes permisos de administrador"}), 401
             
         # Crear token personalizado
         token = auth.create_custom_token(user.uid)
