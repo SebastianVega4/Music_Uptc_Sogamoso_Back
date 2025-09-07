@@ -23,6 +23,17 @@ allowed_origins = [
 # Configuración CORS - debe venir antes de cualquier definición de ruta
 CORS(app, origins=allowed_origins, supports_credentials=True)
 
+@app.after_request
+def after_request(response):
+    """Añadir headers CORS a todas las respuestas"""
+    origin = request.headers.get('Origin')
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
 # Importar utilidades de Firebase PRIMERO
 try:
     from utils.firebase import initialize_firebase, get_db
@@ -360,33 +371,7 @@ def admin_spotify_disconnect():
     except Exception as e:
         print(f"Error al desconectar Spotify: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
-
-# Cargar token del admin desde la base de datos al iniciar la aplicación
-def load_admin_spotify_token():
-    """Cargar el token de Spotify del admin desde la base de datos"""
-    global admin_spotify_token, polling_thread, polling_active
     
-    if firebase_available and db:
-        try:
-            doc_ref = db.collection('admin_settings').document('spotify').get()
-            if doc_ref.exists:
-                data = doc_ref.to_dict()
-                admin_spotify_token = data.get('token_data')
-                
-                # Iniciar polling si hay un token válido
-                if admin_spotify_token and admin_spotify_token.get('access_token'):
-                    # Verificar si el token necesita refresco
-                    if datetime.now() > admin_spotify_token['expires_at']:
-                        if refresh_admin_spotify_token():
-                            polling_thread = start_spotify_polling()
-                    else:
-                        polling_thread = start_spotify_polling()
-        except Exception as e:
-            print(f"Error cargando token de admin: {e}")
-
-# Llamar a la función de carga al iniciar
-load_admin_spotify_token()
-
 # Configurar Spotify
 try:
     sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
@@ -737,5 +722,31 @@ def delete_all_votes():
         print(f"Error al eliminar todos los votos: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
     
+# Cargar token del admin desde la base de datos al iniciar la aplicación
+def load_admin_spotify_token():
+    """Cargar el token de Spotify del admin desde la base de datos"""
+    global admin_spotify_token, polling_thread, polling_active
+    
+    if firebase_available and db:
+        try:
+            doc_ref = db.collection('admin_settings').document('spotify').get()
+            if doc_ref.exists:
+                data = doc_ref.to_dict()
+                admin_spotify_token = data.get('token_data')
+                
+                # Iniciar polling si hay un token válido
+                if admin_spotify_token and admin_spotify_token.get('access_token'):
+                    # Verificar si el token necesita refresco
+                    if datetime.now() > admin_spotify_token['expires_at']:
+                        if refresh_admin_spotify_token():
+                            polling_thread = start_spotify_polling()
+                    else:
+                        polling_thread = start_spotify_polling()
+        except Exception as e:
+            print(f"Error cargando token de admin: {e}")
+
+# Llamar a la función de carga al iniciar
+load_admin_spotify_token()
+
 if __name__ == '__main__':
     app.run(debug=True)
