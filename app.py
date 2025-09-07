@@ -18,13 +18,15 @@ allowed_origins = [
 
 CORS(app, origins=allowed_origins, supports_credentials=True)
 
-# Inicializar Firebase
-cred = credentials.Certificate({
-    "project_id": os.environ.get("FIREBASE_PROJECT_ID"),
-    "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
-    "private_key": os.environ.get("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),
-})
-firebase_admin.initialize_app(cred)
+# Inicializar Firebase solo si no está inicializado
+if not firebase_admin._apps:
+    cred = credentials.Certificate({
+        "project_id": os.environ.get("FIREBASE_PROJECT_ID"),
+        "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
+        "private_key": os.environ.get("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),
+    })
+    firebase_admin.initialize_app(cred)
+
 db = firestore.client()
 
 # Configurar Spotify
