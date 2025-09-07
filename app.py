@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+import hashlib
 
 # Importar utilidades de Firebase
 try:
@@ -78,31 +79,33 @@ def handle_auth():
     if request.method == 'OPTIONS':
         return '', 200
         
-    if not firebase_available or not db:
+    if not firebase_available:
         return jsonify({"error": "Servicio de autenticación no disponible"}), 503
         
     try:
         data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
+        id_token = data.get('idToken')  # Cambiamos a recibir el token de Firebase
         
-        if not email or not password:
-            return jsonify({"error": "Email y contraseña son requeridos"}), 400
+        if not id_token:
+            return jsonify({"error": "Token de Firebase requerido"}), 400
             
-        # Autenticar con Firebase
-        user = auth.get_user_by_email(email)
-            
-        # Crear token personalizado
-        token = auth.create_custom_token(user.uid)
+        # Verificar el token de Firebase
+        decoded_token = auth.verify_id_token(id_token)
+        user_uid = decoded_token['uid']
+        
+        # CUALQUIER usuario autenticado es admin - sin verificar colección
+        # Crear token personalizado para uso interno si es necesario
+        custom_token = auth.create_custom_token(user_uid)
         
         return jsonify({
             "success": True,
-            "token": token,
+            "token": custom_token,
+            "uid": user_uid,
             "message": "Autenticación exitosa"
         }), 200
         
-    except auth.UserNotFoundError:
-        return jsonify({"error": "Credenciales inválidas"}), 401
+    except auth.InvalidIdTokenError:
+        return jsonify({"error": "Token inválido"}), 401
     except Exception as e:
         print(f"Error en autenticación: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
@@ -140,91 +143,105 @@ def handle_search():
         print(f"Error al buscar en Spotify: {e}")
         return jsonify({"error": "Error al buscar en Spotify."}), 500
 
-@app.route('/api/votes', methods=['GET', 'POST', 'DELETE', 'OPTIONS'])
-def handle_votes():
+# Función para obtener hash de IP (para evitar votos duplicados)
+def get_ip_hash():
+    # Obtener la IP real considerando proxies
+    if request.headers.get('X-Forwarded-For'):
+        ip = request.headers.get('X-Forwarded-For').split(',')[0]
+    else:
+        ip = request.remote_addr
+    return hashlib.sha256(ip.encode()).hexdigest()
+
+# Endpoint para votar (accesible sin autenticación)
+@app.route('/api/vote', methods=['POST', 'OPTIONS'])
+def handle_vote():
     if request.method == 'OPTIONS':
         return '', 200
         
     if not firebase_available or not db:
-        return jsonify({"error": "Servicio de votación no disponible"}), 503
+        return jsonify({"error": "Servicio no disponible"}), 503
         
-    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-    
     try:
-        if request.method == 'POST':
-            data = request.get_json()
-            track_id = data.get('trackId')
-            track_info = data.get('trackInfo')
+        data = request.get_json()
+        track_id = data.get('trackId')
+        
+        if not track_id:
+            return jsonify({"error": "ID de canción requerido"}), 400
             
-            if not track_id or not track_info:
-                return jsonify({"error": "Datos incompletos"}), 400
-                
-            # Verificar si ya votó
-            vote_ref = db.collection('votes').document(f"{track_id}_{client_ip}")
-            if vote_ref.get().exists:
-                return jsonify({"message": "Ya has votado por esta canción."}), 409
-                
-            # Actualizar contador
-            song_ref = db.collection('song_ranking').document(track_id)
-            song_data = track_info.copy()
-            song_data.update({
-                'votes': firestore.Increment(1),
-                'lastUpdated': firestore.SERVER_TIMESTAMP
+        # Obtener hash de IP para prevenir votos duplicados
+        ip_hash = get_ip_hash()
+        
+        # Verificar si esta IP ya votó por esta canción
+        vote_ref = db.collection('votes').where('trackId', '==', track_id).where('ipHash', '==', ip_hash).limit(1).get()
+        
+        if len(vote_ref) > 0:
+            return jsonify({"error": "Ya has votado por esta canción"}), 409
+            
+        # Obtener información de la canción si es necesario
+        track_info = data.get('trackInfo', {})
+        
+        # Registrar el voto
+        vote_data = {
+            'trackId': track_id,
+            'ipHash': ip_hash,
+            'timestamp': firestore.SERVER_TIMESTAMP,
+            'userAgent': request.headers.get('User-Agent', ''),
+            'name': track_info.get('name', ''),
+            'artists': track_info.get('artists', []),
+            'image': track_info.get('image', '')
+        }
+        
+        # Añadir el voto
+        db.collection('votes').add(vote_data)
+        
+        # Actualizar el contador de votos en la canción
+        song_ref = db.collection('song_ranking').document(track_id)
+        song_doc = song_ref.get()
+        
+        if song_doc.exists:
+            # Incrementar el contador existente
+            current_votes = song_doc.to_dict().get('votes', 0)
+            song_ref.update({'votes': current_votes + 1})
+        else:
+            # Crear nueva entrada en el ranking
+            song_ref.set({
+                'id': track_id,
+                'name': track_info.get('name', ''),
+                'artists': track_info.get('artists', []),
+                'image': track_info.get('image', ''),
+                'preview_url': track_info.get('preview_url', ''),
+                'votes': 1,
+                'lastVoted': firestore.SERVER_TIMESTAMP
             })
-            song_ref.set(song_data, merge=True)
+        
+        return jsonify({"message": "Voto registrado correctamente"}), 200
             
-            # Registrar voto
-            vote_ref.set({
-                'trackId': track_id,
-                'ip': client_ip,
-                'timestamp': firestore.SERVER_TIMESTAMP
-            })
-            
-            return jsonify({"message": "Voto registrado correctamente."}), 201
-            
-        elif request.method == 'GET':
-            songs_ref = db.collection('song_ranking').order_by('votes', direction=firestore.Query.DESCENDING).limit(50)
-            songs = [{'id': doc.id, **doc.to_dict()} for doc in songs_ref.stream()]
-            return jsonify(songs), 200
-            
-        elif request.method == 'DELETE':
-            track_id = request.args.get('trackId')
-            auth_header = request.headers.get('Authorization')
-            
-            if not auth_header or not auth_header.startswith('Bearer '):
-                return jsonify({"error": "Token de autorización requerido"}), 401
-                
-            token = auth_header[7:]
-            
-            try:
-                # Verificar token
-                decoded_token = auth.verify_id_token(token)
-                
-                # Verificar admin
-                admin_doc = db.collection('admins').document(decoded_token['uid']).get()
-                if not admin_doc.exists:
-                    return jsonify({"error": "No tienes permisos de administrador"}), 401
-                    
-                if not track_id:
-                    return jsonify({"error": "ID de canción requerido"}), 400
-                    
-                # Eliminar canción y votos
-                db.collection('song_ranking').document(track_id).delete()
-                
-                votes = db.collection('votes').where('trackId', '==', track_id).stream()
-                batch = db.batch()
-                for vote in votes:
-                    batch.delete(vote.reference)
-                batch.commit()
-                
-                return jsonify({"message": "Canción eliminada correctamente."}), 200
-                
-            except Exception as e:
-                print(f"Error al verificar token: {e}")
-                return jsonify({"error": "Token inválido"}), 401
-                
     except Exception as e:
-        print(f"Error en API votes: {e}")
+        print(f"Error al registrar voto: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+@app.route('/api/votes', methods=['GET'])
+def get_votes():
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    if not firebase_available or not db:
+        return jsonify({"error": "Servicio no disponible"}), 503
+        
+    try:
+        # Obtener canciones ordenadas por votos (descendente)
+        songs_ref = db.collection('song_ranking').order_by('votes', direction=firestore.Query.DESCENDING).stream()
+        
+        songs = []
+        for song in songs_ref:
+            song_data = song.to_dict()
+            song_data['id'] = song.id
+            songs.append(song_data)
+            
+        return jsonify(songs), 200
+            
+    except Exception as e:
+        print(f"Error al obtener votos: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 if __name__ == '__main__':
