@@ -7,37 +7,45 @@ from spotipy.oauth2 import SpotifyClientCredentials
 # Importar utilidades de Firebase
 try:
     from utils.firebase import initialize_firebase, get_db
-    from firebase_admin import auth
+    from firebase_admin import auth, firestore
     firebase_available = True
+    print("✅ Módulos de Firebase importados correctamente")
 except ImportError as e:
     print(f"⚠️  No se pudieron importar módulos de Firebase: {e}")
     firebase_available = False
 except Exception as e:
-    print(f"⚠️  Error al inicializar Firebase: {e}")
+    print(f"⚠️  Error al importar Firebase: {e}")
     firebase_available = False
 
 app = Flask(__name__)
 
-# Configuración CORS
+# Configuración CORS mejorada
 allowed_origins = [
     "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev",
     "https://music-uptc-sogamoso.vercel.app",
     "https://sebastianvega4.github.io",
     "http://localhost:4200",
+    "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
 ]
+
+# Configuración CORS más robusta
+app.config.update({
+    'CORS_SUPPORTS_CREDENTIALS': True,
+    'CORS_EXPOSE_HEADERS': 'Content-Disposition'
+})
 
 CORS(app, origins=allowed_origins, supports_credentials=True)
 
 # Inicializar Firebase solo si está disponible
+db = None
 if firebase_available:
     try:
         firebase_app, db = initialize_firebase()
-        print("✅ Firebase inicializado correctamente en app.py")
+        print("✅ Firebase inicializado correctamente")
     except Exception as e:
-        print(f"❌ Error inicializando Firebase en app.py: {e}")
+        print(f"❌ Error inicializando Firebase: {e}")
         firebase_available = False
-else:
-    print("❌ Firebase no disponible")
+        db = None
 
 # Configurar Spotify
 try:
@@ -50,24 +58,38 @@ except Exception as e:
     print(f"❌ Error configurando Spotify: {e}")
     sp = None
 
-# Middleware para manejar OPTIONS (preflight)
+# Middleware para manejar CORS y OPTIONS (preflight)
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin", "*"))
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
+        response.headers.add("Access-Control-Allow-Credentials", "true")
+        return response, 200
+
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin', '')
     if origin in allowed_origins:
         response.headers.add('Access-Control-Allow-Origin', origin)
+    else:
+        response.headers.add('Access-Control-Allow-Origin', allowed_origins[0])
+    
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Expose-Headers', 'Content-Disposition')
     return response
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Endpoint para verificar el estado del servicio"""
     status = {
-        "firebase": "connected" if firebase_available else "disconnected",
+        "firebase": "connected" if firebase_available and db else "disconnected",
         "spotify": "connected" if sp else "disconnected",
-        "status": "ok"
+        "status": "ok" if (firebase_available and db and sp) else "degraded"
     }
     return jsonify(status), 200
 
@@ -76,7 +98,7 @@ def handle_auth():
     if request.method == 'OPTIONS':
         return '', 200
         
-    if not firebase_available:
+    if not firebase_available or not db:
         return jsonify({"error": "Servicio de autenticación no disponible"}), 503
         
     try:
@@ -115,6 +137,9 @@ def handle_search():
     if request.method == 'OPTIONS':
         return '', 200
         
+    if not sp:
+        return jsonify({"error": "Servicio de búsqueda no disponible"}), 503
+        
     query = request.args.get('q')
     if not query:
         return jsonify({"error": 'El parámetro de búsqueda "q" es requerido.'}), 400
@@ -144,6 +169,9 @@ def handle_search():
 def handle_votes():
     if request.method == 'OPTIONS':
         return '', 200
+        
+    if not firebase_available or not db:
+        return jsonify({"error": "Servicio de votación no disponible"}), 503
         
     client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     

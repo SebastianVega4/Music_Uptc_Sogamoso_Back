@@ -16,7 +16,7 @@ def initialize_firebase():
             if not private_key:
                 raise ValueError("FIREBASE_PRIVATE_KEY no encontrada en las variables de entorno")
             
-            # Construir el objeto de configuración completo con valores por defecto
+            # Construir el objeto de configuración completo
             firebase_config = {
                 "type": "service_account",
                 "project_id": os.environ.get("FIREBASE_PROJECT_ID"),
