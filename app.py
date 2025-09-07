@@ -6,8 +6,6 @@ from spotipy.oauth2 import SpotifyClientCredentials
 import hashlib
 import threading
 import time
-
-# Añadir estas importaciones
 import requests
 from datetime import datetime, timedelta
 
@@ -22,22 +20,71 @@ allowed_origins = [
     "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
 ]
 
-# Configuración CORS
+# Configuración CORS - debe venir antes de cualquier definición de ruta
 CORS(app, origins=allowed_origins, supports_credentials=True)
+
+# Importar utilidades de Firebase PRIMERO
+try:
+    from utils.firebase import initialize_firebase, get_db
+    from firebase_admin import auth, firestore
+    firebase_available = True
+    print("✅ Módulos de Firebase importados correctamente")
+except ImportError as e:
+    print(f"⚠️  No se pudieron importar módulos de Firebase: {e}")
+    firebase_available = False
+    db = None
+except Exception as e:
+    print(f"⚠️  Error al importar Firebase: {e}")
+    firebase_available = False
+    db = None
+
+# Inicializar Firebase solo si está disponible
+if firebase_available:
+    try:
+        firebase_app, db = initialize_firebase()
+        print("✅ Firebase inicializado correctamente")
+    except Exception as e:
+        print(f"❌ Error inicializando Firebase: {e}")
+        firebase_available = False
+        db = None
+else:
+    db = None
 
 # Variables globales para Spotify OAuth
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.environ.get("SPOTIFY_REDIRECT_URI", "https://music-uptc-sogamoso.vercel.app/api/spotify/callback")
 
-spotify_tokens = {}  # Al
+spotify_tokens = {}  # Para usuarios regulares
 
+# Variables para el admin de Spotify
 admin_spotify_token = None
 currently_playing_cache = None
 cache_expiration = None
 polling_thread = None
 polling_active = False
 
+# Configurar Spotify para búsquedas
+try:
+    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+        client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
+        client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET")
+    ))
+    print("✅ Spotify configurado correctamente")
+except Exception as e:
+    print(f"❌ Error configurando Spotify: {e}")
+    sp = None
+
+# Middleware simplificado para OPTIONS
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        response.headers.add("Access-Control-Allow-Credentials", "true")
+        return response
+    
 def start_spotify_polling():
     """Iniciar polling para la canción actual del admin"""
     global polling_active
@@ -339,30 +386,6 @@ def load_admin_spotify_token():
 
 # Llamar a la función de carga al iniciar
 load_admin_spotify_token()
-
-# Importar utilidades de Firebase
-try:
-    from utils.firebase import initialize_firebase, get_db
-    from firebase_admin import auth, firestore
-    firebase_available = True
-    print("✅ Módulos de Firebase importados correctamente")
-except ImportError as e:
-    print(f"⚠️  No se pudieron importar módulos de Firebase: {e}")
-    firebase_available = False
-except Exception as e:
-    print(f"⚠️  Error al importar Firebase: {e}")
-    firebase_available = False
-
-# Inicializar Firebase solo si está disponible
-db = None
-if firebase_available:
-    try:
-        firebase_app, db = initialize_firebase()
-        print("✅ Firebase inicializado correctamente")
-    except Exception as e:
-        print(f"❌ Error inicializando Firebase: {e}")
-        firebase_available = False
-        db = None
 
 # Configurar Spotify
 try:
