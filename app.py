@@ -19,7 +19,7 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# Configuración CORS mejorada
+# Configuración CORS simplificada - SOLUCIÓN AL ERROR MÚLTIPLE
 allowed_origins = [
     "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev",
     "https://music-uptc-sogamoso.vercel.app",
@@ -28,12 +28,7 @@ allowed_origins = [
     "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
 ]
 
-# Configuración CORS más robusta
-app.config.update({
-    'CORS_SUPPORTS_CREDENTIALS': True,
-    'CORS_EXPOSE_HEADERS': 'Content-Disposition'
-})
-
+# Configuración CORS MÁS SIMPLE - sin el after_request que causa duplicación
 CORS(app, origins=allowed_origins, supports_credentials=True)
 
 # Inicializar Firebase solo si está disponible
@@ -58,30 +53,15 @@ except Exception as e:
     print(f"❌ Error configurando Spotify: {e}")
     sp = None
 
-# Middleware para manejar CORS y OPTIONS (preflight)
+# Middleware simplificado para OPTIONS
 @app.before_request
 def handle_preflight():
     if request.method == "OPTIONS":
         response = jsonify()
-        response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin", "*"))
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
+        response.headers.add("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
         response.headers.add("Access-Control-Allow-Credentials", "true")
-        return response, 200
-
-@app.after_request
-def after_request(response):
-    origin = request.headers.get('Origin', '')
-    if origin in allowed_origins:
-        response.headers.add('Access-Control-Allow-Origin', origin)
-    else:
-        response.headers.add('Access-Control-Allow-Origin', allowed_origins[0])
-    
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    response.headers.add('Access-Control-Expose-Headers', 'Content-Disposition')
-    return response
+        return response
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
