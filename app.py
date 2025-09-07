@@ -1,10 +1,20 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
 import os
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+
+# Importar utilidades de Firebase
+try:
+    from utils.firebase import initialize_firebase, get_db
+    from firebase_admin import auth
+    firebase_available = True
+except ImportError as e:
+    print(f"⚠️  No se pudieron importar módulos de Firebase: {e}")
+    firebase_available = False
+except Exception as e:
+    print(f"⚠️  Error al inicializar Firebase: {e}")
+    firebase_available = False
 
 app = Flask(__name__)
 
@@ -18,27 +28,56 @@ allowed_origins = [
 
 CORS(app, origins=allowed_origins, supports_credentials=True)
 
-# Inicializar Firebase solo si no está inicializado
-if not firebase_admin._apps:
-    cred = credentials.Certificate({
-        "project_id": os.environ.get("FIREBASE_PROJECT_ID"),
-        "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
-        "private_key": os.environ.get("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),
-    })
-    firebase_admin.initialize_app(cred)
-
-db = firestore.client()
+# Inicializar Firebase solo si está disponible
+if firebase_available:
+    try:
+        firebase_app, db = initialize_firebase()
+        print("✅ Firebase inicializado correctamente en app.py")
+    except Exception as e:
+        print(f"❌ Error inicializando Firebase en app.py: {e}")
+        firebase_available = False
+else:
+    print("❌ Firebase no disponible")
 
 # Configurar Spotify
-sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
-    client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
-    client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET")
-))
+try:
+    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+        client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
+        client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET")
+    ))
+    print("✅ Spotify configurado correctamente")
+except Exception as e:
+    print(f"❌ Error configurando Spotify: {e}")
+    sp = None
+
+# Middleware para manejar OPTIONS (preflight)
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin', '')
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Endpoint para verificar el estado del servicio"""
+    status = {
+        "firebase": "connected" if firebase_available else "disconnected",
+        "spotify": "connected" if sp else "disconnected",
+        "status": "ok"
+    }
+    return jsonify(status), 200
 
 @app.route('/api/auth', methods=['POST', 'OPTIONS'])
 def handle_auth():
     if request.method == 'OPTIONS':
         return '', 200
+        
+    if not firebase_available:
+        return jsonify({"error": "Servicio de autenticación no disponible"}), 503
         
     try:
         data = request.get_json()
