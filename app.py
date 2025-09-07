@@ -248,14 +248,13 @@ def get_admin_currently_playing():
         return jsonify({"error": "Admin no autenticado con Spotify"}), 401
 
 # Endpoint para que el admin configure su Spotify
-@app.route('/api/spotify/admin/auth', methods=['GET'])
-def admin_spotify_auth():
-    """Iniciar el flujo de autenticación de Spotify para el admin"""
+@app.route('/api/spotify/auth', methods=['GET'])
+def spotify_auth():
+    """Iniciar el flujo de autenticación de Spotify"""
     scope = 'user-read-currently-playing user-read-playback-state'
     auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}&state=admin"
     return jsonify({"authUrl": auth_url}), 200
 
-# Modificar el callback para manejar autenticación de admin
 @app.route('/api/spotify/callback', methods=['GET'])
 def spotify_callback():
     """Callback para recibir el código de autorización de Spotify"""
@@ -284,44 +283,31 @@ def spotify_callback():
     refresh_token = token_data.get('refresh_token')
     expires_in = token_data['expires_in']
     
-    token_info = {
+    # Guardar el token para el admin
+    global admin_spotify_token
+    admin_spotify_token = {
         'access_token': access_token,
         'refresh_token': refresh_token,
         'expires_at': datetime.now() + timedelta(seconds=expires_in)
     }
     
-    # Determinar si es para el admin o para usuario general
-    if state == 'admin':
-        global admin_spotify_token, polling_thread, polling_active
-        
-        # Guardar token del admin
-        admin_spotify_token = token_info
-        
-        # Guardar en base de datos si está disponible
-        if firebase_available and db:
-            try:
-                db.collection('admin_settings').document('spotify').set({
-                    'token_data': admin_spotify_token,
-                    'updated_at': firestore.SERVER_TIMESTAMP
-                })
-            except Exception as e:
-                print(f"Error guardando token en BD: {e}")
-        
-        # Iniciar polling si no está activo
-        if not polling_active:
-            polling_thread = start_spotify_polling()
-        
-        return jsonify({
-            "message": "Autenticación de admin exitosa", 
-            "redirect": "/admin-panel"
-        }), 200
-    else:
-        # Para usuarios regulares (código existente)
-        spotify_tokens['app'] = token_info
-        return jsonify({
-            "message": "Autenticación exitosa", 
-            "access_token": access_token
-        }), 200
+    # Guardar en base de datos si está disponible
+    if firebase_available and db:
+        try:
+            db.collection('admin_settings').document('spotify').set({
+                'token_data': admin_spotify_token,
+                'updated_at': firestore.SERVER_TIMESTAMP
+            })
+        except Exception as e:
+            print(f"Error guardando token en BD: {e}")
+    
+    # Iniciar polling si no está activo
+    global polling_active, polling_thread
+    if not polling_active:
+        polling_thread = start_spotify_polling()
+    
+    # Redirigir al panel de administración
+    return redirect("https://sebastianvega4.github.io/Music_Uptc_Sogamoso/admin-panel")
 
 # Endpoint para verificar estado de autenticación de Spotify del admin
 @app.route('/api/spotify/admin/status', methods=['GET'])
@@ -395,47 +381,86 @@ def handle_preflight():
 
 @app.route('/api/spotify/currently-playing', methods=['GET'])
 def get_currently_playing():
-    """Obtener la canción actualmente en reproducción"""
-    # Verificar si tenemos un token válido
-    if 'app' not in spotify_tokens or datetime.now() > spotify_tokens['app']['expires_at']:
-        # Intentar refrescar el token si es necesario
-        if not refresh_spotify_token():
-            return jsonify({"error": "No autenticado con Spotify"}), 401
+    """Obtener la canción actualmente en reproducción del admin"""
+    global admin_spotify_token
     
-    access_token = spotify_tokens['app']['access_token']
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
     
-    # Hacer la solicitud a la API de Spotify
-    headers = {
-        'Authorization': f'Bearer {access_token}'
+    # Verificar si el token necesita refresco
+    if datetime.now() > admin_spotify_token['expires_at']:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Obtener la canción actual
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    response = requests.get(
+        'https://api.spotify.com/v1/me/player/currently-playing', 
+        headers=headers
+    )
+    
+    if response.status_code == 200:
+        data = response.json()
+        if data['is_playing']:
+            track = data['item']
+            return jsonify({
+                'is_playing': True,
+                'name': track['name'],
+                'artists': [artist['name'] for artist in track['artists']],
+                'album': track['album']['name'],
+                'image': track['album']['images'][0]['url'] if track['album']['images'] else None,
+                'preview_url': track['preview_url'],
+                'duration_ms': track['duration_ms'],
+                'progress_ms': data['progress_ms'],
+                'id': track['id']
+            }), 200
+        else:
+            return jsonify({"is_playing": False}), 200
+    elif response.status_code == 204:
+        return jsonify({"is_playing": False}), 200
+    else:
+        return jsonify({"error": "Error al obtener información de reproducción"}), response.status_code
+
+def refresh_admin_spotify_token():
+    """Refrescar el token de Spotify del admin"""
+    global admin_spotify_token
+    
+    if not admin_spotify_token or 'refresh_token' not in admin_spotify_token:
+        return False
+        
+    refresh_token = admin_spotify_token['refresh_token']
+    token_url = "https://accounts.spotify.com/api/token"
+    
+    data = {
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token,
+        'client_id': SPOTIFY_CLIENT_ID,
+        'client_secret': SPOTIFY_CLIENT_SECRET
     }
     
-    response = requests.get('https://api.spotify.com/v1/me/player/currently-playing', headers=headers)
+    response = requests.post(token_url, data=data)
+    if response.status_code != 200:
+        return False
+        
+    token_data = response.json()
+    admin_spotify_token['access_token'] = token_data['access_token']
+    admin_spotify_token['expires_at'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
     
-    if response.status_code == 204:
-        # No hay nada reproduciéndose
-        return jsonify({"is_playing": False}), 200
-    elif response.status_code != 200:
-        return jsonify({"error": "Error al obtener información de reproducción"}), response.status_code
-    
-    data = response.json()
-    
-    # Extraer información relevante
-    if data['is_playing']:
-        track = data['item']
-        current_track = {
-            'is_playing': True,
-            'name': track['name'],
-            'artists': [artist['name'] for artist in track['artists']],
-            'album': track['album']['name'],
-            'image': track['album']['images'][0]['url'] if track['album']['images'] else None,
-            'preview_url': track['preview_url'],
-            'duration_ms': track['duration_ms'],
-            'progress_ms': data['progress_ms'],
-            'id': track['id']
-        }
-        return jsonify(current_track), 200
-    else:
-        return jsonify({"is_playing": False}), 200
+    if 'refresh_token' in token_data:
+        admin_spotify_token['refresh_token'] = token_data['refresh_token']
+        
+    # Guardar en base de datos si está disponible
+    if firebase_available and db:
+        try:
+            db.collection('admin_settings').document('spotify').set({
+                'token_data': admin_spotify_token,
+                'updated_at': firestore.SERVER_TIMESTAMP
+            })
+        except Exception as e:
+            print(f"Error guardando token en BD: {e}")
+            
+    return True
 
 def refresh_spotify_token():
     """Refrescar el token de acceso de Spotify"""
