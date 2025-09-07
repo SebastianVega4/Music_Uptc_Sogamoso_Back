@@ -9,6 +9,20 @@ import hashlib
 import requests
 from datetime import datetime, timedelta
 
+app = Flask(__name__)
+
+# Configuración CORS simplificada
+allowed_origins = [
+    "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev",
+    "https://music-uptc-sogamoso.vercel.app",
+    "https://sebastianvega4.github.io",
+    "http://localhost:4200",
+    "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
+]
+
+# Configuración CORS
+CORS(app, origins=allowed_origins, supports_credentials=True)
+
 # Variables globales para Spotify OAuth
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
@@ -17,6 +31,52 @@ SPOTIFY_REDIRECT_URI = os.environ.get("SPOTIFY_REDIRECT_URI", "https://music-upt
 # Almacenamiento simple de tokens (en producción usar una base de datos)
 spotify_tokens = {}
 
+# Importar utilidades de Firebase
+try:
+    from utils.firebase import initialize_firebase, get_db
+    from firebase_admin import auth, firestore
+    firebase_available = True
+    print("✅ Módulos de Firebase importados correctamente")
+except ImportError as e:
+    print(f"⚠️  No se pudieron importar módulos de Firebase: {e}")
+    firebase_available = False
+except Exception as e:
+    print(f"⚠️  Error al importar Firebase: {e}")
+    firebase_available = False
+
+# Inicializar Firebase solo si está disponible
+db = None
+if firebase_available:
+    try:
+        firebase_app, db = initialize_firebase()
+        print("✅ Firebase inicializado correctamente")
+    except Exception as e:
+        print(f"❌ Error inicializando Firebase: {e}")
+        firebase_available = False
+        db = None
+
+# Configurar Spotify
+try:
+    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+        client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
+        client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET")
+    ))
+    print("✅ Spotify configurado correctamente")
+except Exception as e:
+    print(f"❌ Error configurando Spotify: {e}")
+    sp = None
+
+# Middleware simplificado para OPTIONS
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        response.headers.add("Access-Control-Allow-Credentials", "true")
+        return response
+
+# Spotify OAuth Endpoints
 @app.route('/api/spotify/auth', methods=['GET'])
 def spotify_auth():
     """Iniciar el flujo de autenticación de Spotify"""
@@ -51,7 +111,6 @@ def spotify_callback():
     expires_in = token_data['expires_in']
     
     # Guardar el token (en producción, asociar con un usuario específico)
-    # Para este ejemplo, usaremos un token único para la aplicación
     spotify_tokens['app'] = {
         'access_token': access_token,
         'refresh_token': refresh_token,
@@ -132,65 +191,6 @@ def refresh_spotify_token():
         spotify_tokens['app']['refresh_token'] = token_data['refresh_token']
         
     return True
-
-# Importar utilidades de Firebase
-try:
-    from utils.firebase import initialize_firebase, get_db
-    from firebase_admin import auth, firestore
-    firebase_available = True
-    print("✅ Módulos de Firebase importados correctamente")
-except ImportError as e:
-    print(f"⚠️  No se pudieron importar módulos de Firebase: {e}")
-    firebase_available = False
-except Exception as e:
-    print(f"⚠️  Error al importar Firebase: {e}")
-    firebase_available = False
-
-app = Flask(__name__)
-
-# Configuración CORS simplificada - SOLUCIÓN AL ERROR MÚLTIPLE
-allowed_origins = [
-    "https://4200-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev",
-    "https://music-uptc-sogamoso.vercel.app",
-    "https://sebastianvega4.github.io",
-    "http://localhost:4200",
-    "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
-]
-
-# Configuración CORS MÁS SIMPLE - sin el after_request que causa duplicación
-CORS(app, origins=allowed_origins, supports_credentials=True)
-
-# Inicializar Firebase solo si está disponible
-db = None
-if firebase_available:
-    try:
-        firebase_app, db = initialize_firebase()
-        print("✅ Firebase inicializado correctamente")
-    except Exception as e:
-        print(f"❌ Error inicializando Firebase: {e}")
-        firebase_available = False
-        db = None
-
-# Configurar Spotify
-try:
-    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
-        client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
-        client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET")
-    ))
-    print("✅ Spotify configurado correctamente")
-except Exception as e:
-    print(f"❌ Error configurando Spotify: {e}")
-    sp = None
-
-# Middleware simplificado para OPTIONS
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        response = jsonify()
-        response.headers.add("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        response.headers.add("Access-Control-Allow-Credentials", "true")
-        return response
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
