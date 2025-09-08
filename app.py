@@ -147,11 +147,11 @@ def start_spotify_polling():
                         currently_playing_cache = {'is_playing': False}
                         print("⏸️  Spotify en pausa")
                     
-                    # Cachear por 10 segundos
-                    cache_expiration = datetime.now() + timedelta(seconds=10)
+                    # Cachear por 10 segundos - usar UTC consistentemente
+                    cache_expiration = datetime.now(timezone.utc) + timedelta(seconds=10)
                 elif response.status_code == 204:
                     currently_playing_cache = {'is_playing': False}
-                    cache_expiration = datetime.now() + timedelta(seconds=10)
+                    cache_expiration = datetime.now(timezone.utc) + timedelta(seconds=10)
                     print("⏸️  No se está reproduciendo nada")
                 else:
                     print(f"❌ Error en API de Spotify: {response.status_code}")
@@ -216,7 +216,7 @@ def get_admin_currently_playing():
     """Obtener la canción actualmente en reproducción del admin"""
     global currently_playing_cache, cache_expiration
     
-    # Verificar si tenemos caché válida
+    # Verificar si tenemos caché válida - ambos deben ser aware
     if currently_playing_cache and cache_expiration and datetime.now(timezone.utc) < cache_expiration:
         return jsonify(currently_playing_cache), 200
     
@@ -253,12 +253,12 @@ def get_admin_currently_playing():
             else:
                 currently_playing_cache = {'is_playing': False}
             
-            # Cachear por 10 segundos
-            cache_expiration = datetime.now() + timedelta(seconds=10)
+            # Cachear por 10 segundos - usar UTC consistentemente
+            cache_expiration = datetime.now(timezone.utc) + timedelta(seconds=10)
             return jsonify(currently_playing_cache), 200
         elif response.status_code == 204:
             currently_playing_cache = {'is_playing': False}
-            cache_expiration = datetime.now() + timedelta(seconds=10)
+            cache_expiration = datetime.now(timezone.utc) + timedelta(seconds=10)
             return jsonify(currently_playing_cache), 200
         else:
             return jsonify({"error": "Error al obtener información de reproducción"}), response.status_code
