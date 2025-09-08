@@ -718,8 +718,11 @@ def handle_votes():
             for song in songs_ref:
                 song_data = song.to_dict()
                 song_data['id'] = song.id
+                # Asegurar que tenemos la fecha de creación
+                if 'lastVoted' in song_data:
+                    song_data['createdAt'] = song_data['lastVoted'].isoformat() if hasattr(song_data['lastVoted'], 'isoformat') else song_data['lastVoted']
                 songs.append(song_data)
-                
+        
             return jsonify(songs), 200
                 
         except Exception as e:
