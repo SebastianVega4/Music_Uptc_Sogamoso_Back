@@ -192,7 +192,7 @@ def refresh_admin_spotify_token():
     token_data = response.json()
     admin_spotify_token['access_token'] = token_data['access_token']
     
-    # Usar UTC para evitar problemas de zona horaria
+    # Usar UTC consistentemente
     admin_spotify_token['expires_at'] = datetime.now(timezone.utc) + timedelta(seconds=token_data['expires_in'])
     
     if 'refresh_token' in token_data:
