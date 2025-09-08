@@ -266,6 +266,8 @@ def admin_spotify_auth():
     """Iniciar el flujo de autenticación de Spotify para el admin"""
     scope = 'user-read-currently-playing user-read-playback-state'
     auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}&state=admin"
+    print(f"🔗 URL de auth generada: {auth_url}")
+    print(f"📋 Redirect URI configurada: {SPOTIFY_REDIRECT_URI}")
     return jsonify({"authUrl": auth_url}), 200
 
 @app.route('/api/spotify/callback', methods=['GET'])
@@ -289,6 +291,7 @@ def spotify_callback():
     
     response = requests.post(token_url, data=data)
     if response.status_code != 200:
+        print(f"Error al obtener token: {response.status_code} - {response.text}")
         return jsonify({"error": "Error al obtener token de acceso"}), 400
         
     token_data = response.json()
@@ -314,6 +317,7 @@ def spotify_callback():
                     'token_data': admin_spotify_token,
                     'updated_at': firestore.SERVER_TIMESTAMP
                 })
+                print("✅ Token de admin guardado en Firebase")
             except Exception as e:
                 print(f"Error guardando token en BD: {e}")
         
@@ -322,8 +326,9 @@ def spotify_callback():
         if not polling_active:
             polling_thread = start_spotify_polling()
         
-        # Redirigir al panel de administración
-        return redirect('https://music-uptc-sogamoso.vercel.app/admin-panel')
+        # CORRECCIÓN: Redirigir a la URL correcta de GitHub Pages
+        print("✅ Redirigiendo a admin-panel")
+        return redirect('https://sebastianvega4.github.io/Music_Uptc_Sogamoso/admin-panel')
     else:
         # Para usuarios regulares
         spotify_tokens['app'] = {
