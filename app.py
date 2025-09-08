@@ -8,7 +8,7 @@ import hashlib
 import threading
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta , timezone
 
 app = Flask(__name__)
 
@@ -111,8 +111,8 @@ def start_spotify_polling():
                     time.sleep(10)
                     continue
                 
-                # Verificar si el token necesita refresco
-                if datetime.now() > admin_spotify_token['expires_at']:
+                # Verificar si el token necesita refresco - usar UTC
+                if datetime.now(timezone.utc) > admin_spotify_token['expires_at']:
                     if not refresh_admin_spotify_token():
                         print("❌ No se pudo refrescar el token de Spotify")
                         time.sleep(30)
@@ -217,13 +217,13 @@ def get_admin_currently_playing():
     global currently_playing_cache, cache_expiration
     
     # Verificar si tenemos caché válida
-    if currently_playing_cache and cache_expiration and datetime.now() < cache_expiration:
+    if currently_playing_cache and cache_expiration and datetime.now(timezone.utc) < cache_expiration:
         return jsonify(currently_playing_cache), 200
     
     # Si no hay caché o está expirada, intentar obtener datos
     if admin_spotify_token and admin_spotify_token.get('access_token'):
-        # Verificar si el token necesita refresco
-        if datetime.now() > admin_spotify_token['expires_at']:
+        # Verificar si el token necesita refresco - usar UTC consistentemente
+        if datetime.now(timezone.utc) > admin_spotify_token['expires_at']:
             if not refresh_admin_spotify_token():
                 return jsonify({"error": "Token de Spotify expirado"}), 401
         
@@ -295,7 +295,7 @@ def spotify_callback():
     data = {
         'grant_type': 'authorization_code',
         'code': code,
-        'redirect_uri': SPOTIFY_REDIRECT_URI,  # Usar la variable correcta
+        'redirect_uri': SPOTIFY_REDIRECT_URI,
         'client_id': SPOTIFY_CLIENT_ID,
         'client_secret': SPOTIFY_CLIENT_SECRET
     }
@@ -313,11 +313,11 @@ def spotify_callback():
     if state == 'admin':
         global admin_spotify_token
         
-        # Guardar token del admin
+        # Guardar token del admin - usar UTC
         admin_spotify_token = {
             'access_token': access_token,
             'refresh_token': refresh_token,
-            'expires_at': datetime.now() + timedelta(seconds=expires_in)
+            'expires_at': datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         }
         
         # Guardar en base de datos si está disponible
@@ -356,8 +356,8 @@ def spotify_callback():
 def admin_spotify_status():
     """Verificar si el admin está autenticado con Spotify"""
     if admin_spotify_token and admin_spotify_token.get('access_token'):
-        # Verificar si el token es válido
-        is_valid = datetime.now() < admin_spotify_token['expires_at']
+        # Verificar si el token es válido - usar UTC consistentemente
+        is_valid = datetime.now(timezone.utc) < admin_spotify_token['expires_at']
         return jsonify({
             "authenticated": True,
             "token_valid": is_valid
@@ -371,14 +371,24 @@ def admin_spotify_disconnect():
     """Desconectar la cuenta de Spotify del admin"""
     global admin_spotify_token, currently_playing_cache, polling_active
     
+    print(f"🔍 Headers recibidos en disconnect: {dict(request.headers)}")  # Debug
+    
     # Verificar autenticación para operaciones de admin
     auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
+    if not auth_header:
+        print("❌ No se encontró header Authorization")
         return jsonify({"error": "Token de autorización requerido"}), 401
+        
+    if not auth_header.startswith('Bearer '):
+        print(f"❌ Formato de Authorization incorrecto: {auth_header}")
+        return jsonify({"error": "Formato de token incorrecto"}), 401
         
     try:
         id_token = auth_header.split('Bearer ')[1]
+        print(f"🔑 Token recibido (primeros 50 chars): {id_token[:50]}...")  # Debug
+        
         decoded_token = auth.verify_id_token(id_token)
+        print(f"✅ Token decodificado para UID: {decoded_token['uid']}")
         
         # Limpiar datos de Spotify del admin
         admin_spotify_token = None
@@ -389,15 +399,17 @@ def admin_spotify_disconnect():
         if firebase_available and db:
             try:
                 db.collection('admin_settings').document('spotify').delete()
+                print("✅ Token eliminado de Firebase")
             except Exception as e:
                 print(f"Error eliminando token de BD: {e}")
         
         return jsonify({"message": "Spotify desconectado correctamente"}), 200
             
-    except auth.InvalidIdTokenError:
+    except auth.InvalidIdTokenError as e:
+        print(f"❌ Token inválido: {e}")
         return jsonify({"error": "Token inválido"}), 401
     except Exception as e:
-        print(f"Error al desconectar Spotify: {e}")
+        print(f"❌ Error al desconectar Spotify: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
     
 # Configurar Spotify
@@ -429,8 +441,8 @@ def get_currently_playing():
     if not admin_spotify_token or not admin_spotify_token.get('access_token'):
         return jsonify({"error": "Admin no autenticado con Spotify"}), 401
     
-    # Verificar si el token necesita refresco
-    if datetime.now() > admin_spotify_token['expires_at']:
+    # Verificar si el token necesita refresco - usar UTC
+    if datetime.now(timezone.utc) > admin_spotify_token['expires_at']:
         if not refresh_admin_spotify_token():
             return jsonify({"error": "Token de Spotify expirado"}), 401
     
