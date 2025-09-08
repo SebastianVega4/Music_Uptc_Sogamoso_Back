@@ -109,14 +109,17 @@ def start_spotify_polling():
                 if admin_spotify_token and admin_spotify_token.get('access_token'):
                     # Verificar si el token necesita refresco
                     if datetime.now() > admin_spotify_token['expires_at']:
-                        refresh_admin_spotify_token()
+                        if not refresh_admin_spotify_token():
+                            print("No se pudo refrescar el token de Spotify")
+                            continue
                     
                     # Obtener la canción actual
                     access_token = admin_spotify_token['access_token']
                     headers = {'Authorization': f'Bearer {access_token}'}
                     response = requests.get(
                         'https://api.spotify.com/v1/me/player/currently-playing', 
-                        headers=headers
+                        headers=headers,
+                        timeout=10
                     )
                     
                     if response.status_code == 200:
@@ -142,6 +145,8 @@ def start_spotify_polling():
                     elif response.status_code == 204:
                         currently_playing_cache = {'is_playing': False}
                         cache_expiration = datetime.now() + timedelta(seconds=10)
+                    else:
+                        print(f"Error en API de Spotify: {response.status_code}")
             except Exception as e:
                 print(f"Error en polling de Spotify: {e}")
                 currently_playing_cache = {'error': str(e)}
@@ -318,7 +323,7 @@ def spotify_callback():
             polling_thread = start_spotify_polling()
         
         # Redirigir al panel de administración
-        return redirect('https://sebastianvega4.github.io/Music_Uptc_Sogamoso/admin-panel')
+        return redirect('https://music-uptc-sogamoso.vercel.app/admin-panel')
     else:
         # Para usuarios regulares
         spotify_tokens['app'] = {
@@ -330,7 +335,7 @@ def spotify_callback():
             "message": "Autenticación exitosa", 
             "access_token": access_token
         }), 200
-
+    
 # Endpoint para verificar estado de autenticación de Spotify del admin
 @app.route('/api/spotify/admin/status', methods=['GET'])
 def admin_spotify_status():
