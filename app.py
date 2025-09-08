@@ -169,9 +169,24 @@ def start_spotify_polling():
     print("✅ Hilo de polling iniciado")
     return thread
 
+def ensure_aware_datetime(dt):
+    """Asegurar que un datetime sea timezone-aware (UTC)"""
+    if isinstance(dt, str):
+        # Convertir string a datetime
+        if 'Z' in dt:
+            dt = dt.replace('Z', '+00:00')
+        return datetime.fromisoformat(dt)
+    elif dt.tzinfo is None:
+        # Si es naive, convertirlo a aware (UTC)
+        return dt.replace(tzinfo=timezone.utc)
+    else:
+        # Ya es aware, retornar tal cual
+        return dt
+    
 def refresh_admin_spotify_token():
     """Refrescar el token de Spotify del admin"""
     global admin_spotify_token
+    
     if not admin_spotify_token or 'refresh_token' not in admin_spotify_token:
         return False
         
@@ -192,7 +207,7 @@ def refresh_admin_spotify_token():
     token_data = response.json()
     admin_spotify_token['access_token'] = token_data['access_token']
     
-    # Usar UTC consistentemente
+    # Usar UTC consistentemente - asegurar que ambas fechas sean aware
     admin_spotify_token['expires_at'] = datetime.now(timezone.utc) + timedelta(seconds=token_data['expires_in'])
     
     if 'refresh_token' in token_data:
@@ -217,8 +232,11 @@ def get_admin_currently_playing():
     global currently_playing_cache, cache_expiration
     
     # Verificar si tenemos caché válida - ambos deben ser aware
-    if currently_playing_cache and cache_expiration and datetime.now(timezone.utc) < cache_expiration:
-        return jsonify(currently_playing_cache), 200
+    if currently_playing_cache and cache_expiration:
+        if cache_expiration:
+            cache_expiration = ensure_aware_datetime(cache_expiration)
+        if datetime.now(timezone.utc) < cache_expiration:
+            return jsonify(currently_playing_cache), 200
     
     # Si no hay caché o está expirada, intentar obtener datos
     if admin_spotify_token and admin_spotify_token.get('access_token'):
@@ -354,10 +372,12 @@ def spotify_callback():
 # Endpoint para verificar estado de autenticación de Spotify del admin
 @app.route('/api/spotify/admin/status', methods=['GET'])
 def admin_spotify_status():
+    
     """Verificar si el admin está autenticado con Spotify"""
     if admin_spotify_token and admin_spotify_token.get('access_token'):
-        # Verificar si el token es válido - usar UTC consistentemente
-        is_valid = datetime.now(timezone.utc) < admin_spotify_token['expires_at']
+        # Asegurar que ambas fechas sean aware para la comparación
+        expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+        is_valid = datetime.now(timezone.utc) < expires_at
         return jsonify({
             "authenticated": True,
             "token_valid": is_valid
@@ -633,6 +653,21 @@ def get_ip_hash():
         ip = request.remote_addr
     return hashlib.sha256(ip.encode()).hexdigest()
 
+def get_user_fingerprint():
+    """Obtener un identificador único basado en IP + User-Agent"""
+    # Obtener la IP real considerando proxies
+    if request.headers.get('X-Forwarded-For'):
+        ip = request.headers.get('X-Forwarded-For').split(',')[0]
+    else:
+        ip = request.remote_addr
+    
+    # Obtener User-Agent
+    user_agent = request.headers.get('User-Agent', '')
+    
+    # Crear un hash único combinando IP + User-Agent
+    fingerprint_string = f"{ip}-{user_agent}"
+    return hashlib.sha256(fingerprint_string.encode()).hexdigest()
+
 # Endpoint para votar (accesible sin autenticación)
 @app.route('/api/vote', methods=['POST', 'OPTIONS'])
 def handle_vote():
@@ -649,11 +684,11 @@ def handle_vote():
         if not track_id:
             return jsonify({"error": "ID de canción requerido"}), 400
             
-        # Obtener hash de IP para prevenir votos duplicados
-        ip_hash = get_ip_hash()
+        # Obtener fingerprint único del usuario (IP + User-Agent)
+        user_fingerprint = get_user_fingerprint()
         
-        # Verificar si esta IP ya votó por esta canción
-        vote_ref = db.collection('votes').where('trackId', '==', track_id).where('ipHash', '==', ip_hash).limit(1).get()
+        # Verificar si este usuario ya votó por esta canción
+        vote_ref = db.collection('votes').where('trackId', '==', track_id).where('userFingerprint', '==', user_fingerprint).limit(1).get()
         
         if len(vote_ref) > 0:
             return jsonify({"error": "Ya has votado por esta canción"}), 409
@@ -664,9 +699,10 @@ def handle_vote():
         # Registrar el voto
         vote_data = {
             'trackId': track_id,
-            'ipHash': ip_hash,
-            'timestamp': firestore.SERVER_TIMESTAMP,
+            'userFingerprint': user_fingerprint,
+            'ipAddress': request.remote_addr,
             'userAgent': request.headers.get('User-Agent', ''),
+            'timestamp': firestore.SERVER_TIMESTAMP,
             'name': track_info.get('name', ''),
             'artists': track_info.get('artists', []),
             'image': track_info.get('image', '')
@@ -818,8 +854,9 @@ def load_admin_spotify_token():
                 
                 # Iniciar polling si hay un token válido
                 if admin_spotify_token and admin_spotify_token.get('access_token'):
-                    # Verificar si el token necesita refresco
-                    if datetime.now() > admin_spotify_token['expires_at']:
+                    # Verificar si el token necesita refresco - usar UTC
+                    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+                    if datetime.now(timezone.utc) > expires_at:
                         if refresh_admin_spotify_token():
                             polling_thread = start_spotify_polling()
                     else:
