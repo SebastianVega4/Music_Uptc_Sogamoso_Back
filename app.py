@@ -106,49 +106,58 @@ def start_spotify_polling():
         global currently_playing_cache, cache_expiration
         while polling_active:
             try:
-                if admin_spotify_token and admin_spotify_token.get('access_token'):
-                    # Verificar si el token necesita refresco
-                    if datetime.now() > admin_spotify_token['expires_at']:
-                        if not refresh_admin_spotify_token():
-                            print("No se pudo refrescar el token de Spotify")
-                            continue
-                    
-                    # Obtener la canción actual
-                    access_token = admin_spotify_token['access_token']
-                    headers = {'Authorization': f'Bearer {access_token}'}
-                    response = requests.get(
-                        'https://api.spotify.com/v1/me/player/currently-playing', 
-                        headers=headers,
-                        timeout=10
-                    )
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data['is_playing']:
-                            track = data['item']
-                            currently_playing_cache = {
-                                'is_playing': True,
-                                'name': track['name'],
-                                'artists': [artist['name'] for artist in track['artists']],
-                                'album': track['album']['name'],
-                                'image': track['album']['images'][0]['url'] if track['album']['images'] else None,
-                                'preview_url': track['preview_url'],
-                                'duration_ms': track['duration_ms'],
-                                'progress_ms': data['progress_ms'],
-                                'id': track['id']
-                            }
-                        else:
-                            currently_playing_cache = {'is_playing': False}
-                        
-                        # Cachear por 10 segundos
-                        cache_expiration = datetime.now() + timedelta(seconds=10)
-                    elif response.status_code == 204:
-                        currently_playing_cache = {'is_playing': False}
-                        cache_expiration = datetime.now() + timedelta(seconds=10)
+                if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+                    print("⚠️  No hay token de Spotify para polling")
+                    time.sleep(10)
+                    continue
+                
+                # Verificar si el token necesita refresco
+                if datetime.now() > admin_spotify_token['expires_at']:
+                    if not refresh_admin_spotify_token():
+                        print("❌ No se pudo refrescar el token de Spotify")
+                        time.sleep(30)
+                        continue
+                
+                # Obtener la canción actual
+                access_token = admin_spotify_token['access_token']
+                headers = {'Authorization': f'Bearer {access_token}'}
+                response = requests.get(
+                    'https://api.spotify.com/v1/me/player/currently-playing', 
+                    headers=headers,
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data['is_playing']:
+                        track = data['item']
+                        currently_playing_cache = {
+                            'is_playing': True,
+                            'name': track['name'],
+                            'artists': [artist['name'] for artist in track['artists']],
+                            'album': track['album']['name'],
+                            'image': track['album']['images'][0]['url'] if track['album']['images'] else None,
+                            'preview_url': track['preview_url'],
+                            'duration_ms': track['duration_ms'],
+                            'progress_ms': data['progress_ms'],
+                            'id': track['id']
+                        }
+                        print(f"🎵 Reproduciendo: {currently_playing_cache['name']}")
                     else:
-                        print(f"Error en API de Spotify: {response.status_code}")
+                        currently_playing_cache = {'is_playing': False}
+                        print("⏸️  Spotify en pausa")
+                    
+                    # Cachear por 10 segundos
+                    cache_expiration = datetime.now() + timedelta(seconds=10)
+                elif response.status_code == 204:
+                    currently_playing_cache = {'is_playing': False}
+                    cache_expiration = datetime.now() + timedelta(seconds=10)
+                    print("⏸️  No se está reproduciendo nada")
+                else:
+                    print(f"❌ Error en API de Spotify: {response.status_code}")
+                    currently_playing_cache = {'error': f"HTTP {response.status_code}"}
             except Exception as e:
-                print(f"Error en polling de Spotify: {e}")
+                print(f"❌ Error en polling de Spotify: {e}")
                 currently_playing_cache = {'error': str(e)}
             
             time.sleep(5)  # Esperar 5 segundos entre consultas
@@ -157,6 +166,7 @@ def start_spotify_polling():
     thread = threading.Thread(target=poll_spotify)
     thread.daemon = True
     thread.start()
+    print("✅ Hilo de polling iniciado")
     return thread
 
 def refresh_admin_spotify_token():
@@ -266,6 +276,7 @@ def admin_spotify_auth():
     """Iniciar el flujo de autenticación de Spotify para el admin"""
     scope = 'user-read-currently-playing user-read-playback-state'
     auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}&state=admin"
+    print(f"🔗 URL de auth de admin: {auth_url}")
     return jsonify({"authUrl": auth_url}), 200
 
 @app.route('/api/spotify/callback', methods=['GET'])
@@ -282,7 +293,7 @@ def spotify_callback():
     data = {
         'grant_type': 'authorization_code',
         'code': code,
-        'redirect_uri': SPOTIFY_REDIRECT_URI,
+        'redirect_uri': SPOTIFY_REDIRECT_URI,  # Usar la variable correcta
         'client_id': SPOTIFY_CLIENT_ID,
         'client_secret': SPOTIFY_CLIENT_SECRET
     }
@@ -314,6 +325,7 @@ def spotify_callback():
                     'token_data': admin_spotify_token,
                     'updated_at': firestore.SERVER_TIMESTAMP
                 })
+                print("✅ Token de admin guardado en Firebase")
             except Exception as e:
                 print(f"Error guardando token en BD: {e}")
         
@@ -321,9 +333,10 @@ def spotify_callback():
         global polling_active, polling_thread
         if not polling_active:
             polling_thread = start_spotify_polling()
+            print("✅ Polling de Spotify iniciado")
         
-        # Redirigir al panel de administración
-        return redirect('https://music-uptc-sogamoso.vercel.app/admin-panel')
+        # Redirigir al panel de administración con mensaje de éxito
+        return redirect('https://music-uptc-sogamoso.vercel.app/admin-panel?spotify_connected=true')
     else:
         # Para usuarios regulares
         spotify_tokens['app'] = {
