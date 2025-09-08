@@ -11,5 +11,12 @@
       "src": "/api/(.*)",
       "dest": "app.py"
     }
-  ]
+  ],
+  "env": {
+    "SUPABASE_URL": "@supabase_url",
+    "SUPABASE_KEY": "@supabase_key",
+    "SPOTIFY_CLIENT_ID": "@spotify_client_id",
+    "SPOTIFY_CLIENT_SECRET": "@spotify_client_secret",
+    "SPOTIFY_REDIRECT_URI": "@spotify_redirect_uri"
+  }
 }
