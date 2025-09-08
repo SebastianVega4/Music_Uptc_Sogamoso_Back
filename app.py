@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask import redirect
 from flask_cors import CORS
 import os
 import spotipy
@@ -250,7 +251,14 @@ def get_admin_currently_playing():
 # Endpoint para que el admin configure su Spotify
 @app.route('/api/spotify/auth', methods=['GET'])
 def spotify_auth():
-    """Iniciar el flujo de autenticación de Spotify"""
+    """Iniciar el flujo de autenticación de Spotify para usuarios regulares"""
+    scope = 'user-read-currently-playing user-read-playback-state'
+    auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}"
+    return jsonify({"authUrl": auth_url}), 200
+
+@app.route('/api/spotify/admin/auth', methods=['GET'])
+def admin_spotify_auth():
+    """Iniciar el flujo de autenticación de Spotify para el admin"""
     scope = 'user-read-currently-playing user-read-playback-state'
     auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}&state=admin"
     return jsonify({"authUrl": auth_url}), 200
@@ -283,31 +291,45 @@ def spotify_callback():
     refresh_token = token_data.get('refresh_token')
     expires_in = token_data['expires_in']
     
-    # Guardar el token para el admin
-    global admin_spotify_token
-    admin_spotify_token = {
-        'access_token': access_token,
-        'refresh_token': refresh_token,
-        'expires_at': datetime.now() + timedelta(seconds=expires_in)
-    }
-    
-    # Guardar en base de datos si está disponible
-    if firebase_available and db:
-        try:
-            db.collection('admin_settings').document('spotify').set({
-                'token_data': admin_spotify_token,
-                'updated_at': firestore.SERVER_TIMESTAMP
-            })
-        except Exception as e:
-            print(f"Error guardando token en BD: {e}")
-    
-    # Iniciar polling si no está activo
-    global polling_active, polling_thread
-    if not polling_active:
-        polling_thread = start_spotify_polling()
-    
-    # Redirigir al panel de administración
-    return redirect("https://sebastianvega4.github.io/Music_Uptc_Sogamoso/admin-panel")
+    # Determinar si es para el admin o para usuario general
+    if state == 'admin':
+        global admin_spotify_token
+        
+        # Guardar token del admin
+        admin_spotify_token = {
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'expires_at': datetime.now() + timedelta(seconds=expires_in)
+        }
+        
+        # Guardar en base de datos si está disponible
+        if firebase_available and db:
+            try:
+                db.collection('admin_settings').document('spotify').set({
+                    'token_data': admin_spotify_token,
+                    'updated_at': firestore.SERVER_TIMESTAMP
+                })
+            except Exception as e:
+                print(f"Error guardando token en BD: {e}")
+        
+        # Iniciar polling si no está activo
+        global polling_active, polling_thread
+        if not polling_active:
+            polling_thread = start_spotify_polling()
+        
+        # Redirigir al panel de administración
+        return redirect('https://sebastianvega4.github.io/Music_Uptc_Sogamoso/admin-panel')
+    else:
+        # Para usuarios regulares
+        spotify_tokens['app'] = {
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'expires_at': datetime.now() + timedelta(seconds=expires_in)
+        }
+        return jsonify({
+            "message": "Autenticación exitosa", 
+            "access_token": access_token
+        }), 200
 
 # Endpoint para verificar estado de autenticación de Spotify del admin
 @app.route('/api/spotify/admin/status', methods=['GET'])
