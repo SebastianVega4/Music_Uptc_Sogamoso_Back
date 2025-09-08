@@ -737,7 +737,7 @@ def handle_vote():
         print(f"Error al registrar voto: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
-@app.route('/api/votes', methods=['DELETE', 'OPTIONS'])
+@app.route('/api/votes', methods=['GET', 'DELETE', 'OPTIONS'])
 def handle_votes():
     if request.method == 'OPTIONS':
         return '', 200
@@ -745,7 +745,27 @@ def handle_votes():
     if not firebase_available or not db:
         return jsonify({"error": "Servicio no disponible"}), 503
         
-    if request.method == 'DELETE':
+    if request.method == 'GET':
+        try:
+            # Obtener canciones ordenadas por votos (descendente)
+            songs_ref = db.collection('song_ranking').order_by('votes', direction=firestore.Query.DESCENDING).stream()
+            
+            songs = []
+            for song in songs_ref:
+                song_data = song.to_dict()
+                song_data['id'] = song.id
+                # Asegurar que tenemos la fecha de creación
+                if 'lastVoted' in song_data:
+                    song_data['createdAt'] = song_data['lastVoted'].isoformat() if hasattr(song_data['lastVoted'], 'isoformat') else song_data['lastVoted']
+                songs.append(song_data)
+        
+            return jsonify(songs), 200
+                
+        except Exception as e:
+            print(f"Error al obtener votos: {e}")
+            return jsonify({"error": "Error interno del servidor"}), 500
+            
+    elif request.method == 'DELETE':
         try:
             # Verificar autenticación para operaciones de eliminación
             auth_header = request.headers.get('Authorization')
@@ -757,7 +777,7 @@ def handle_votes():
             # Verificar el token de Firebase
             decoded_token = auth.verify_id_token(id_token)
             
-            # Obtener trackId de los parámetros de consulta - CORREGIDO
+            # Obtener trackId de los parámetros de consulta
             track_id = request.args.get('trackId')
             if not track_id:
                 return jsonify({"error": "ID de canción requerido"}), 400
