@@ -577,7 +577,7 @@ def handle_vote():
         
         # Registrar el voto
         vote_data = {
-            'trackId': track_id,
+            'trackid': track_id,
             'userFingerprint': user_fingerprint,
             'ipAddress': request.remote_addr,
             'userAgent': request.headers.get('User-Agent', ''),
