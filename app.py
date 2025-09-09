@@ -93,10 +93,17 @@ def verify_basic_auth():
         # Decodificar las credenciales
         encoded_credentials = auth_header.split('Basic ')[1]
         decoded_credentials = base64.b64decode(encoded_credentials).decode('utf-8')
-        email, password = decoded_credentials.split(':', 1)
         
-        # Verificar contra las credenciales fijas
-        return email == ADMIN_CREDENTIALS["email"] and password == ADMIN_CREDENTIALS["password"]
+        # Verificar contra las credenciales fijas O contra el token almacenado
+        if decoded_credentials == f"{ADMIN_CREDENTIALS['email']}:{ADMIN_CREDENTIALS['password']}":
+            return True
+            
+        # También verificar si es el token almacenado
+        stored_token = localStorage.getItem('adminToken')
+        if stored_token and encoded_credentials == stored_token:
+            return True
+            
+        return False
     except:
         return False
 
