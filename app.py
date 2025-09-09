@@ -550,7 +550,7 @@ def handle_vote():
         
     try:
         data = request.get_json()
-        track_id = data.get('trackId')
+        track_id = data.get('trackid')
         
         if not track_id:
             return jsonify({"error": "ID de canción requerido"}), 400
@@ -674,7 +674,7 @@ def handle_delete_votes():
             return jsonify({"error": "Credenciales inválidas"}), 401
             
         # Obtener trackId de los parámetros de consulta
-        track_id = request.args.get('trackId')
+        track_id = request.args.get('trackid')
         if not track_id:
             return jsonify({"error": "ID de canción requerido"}), 400
             
@@ -682,7 +682,7 @@ def handle_delete_votes():
         supabase.table('song_ranking').delete().eq('id', track_id).execute()
         
         # También eliminar todos los votos asociados a esta canción
-        supabase.table('votes').delete().eq('trackId', track_id).execute()
+        supabase.table('votes').delete().eq('trackid', track_id).execute()
             
         return jsonify({"message": "Canción eliminada correctamente"}), 200
             
