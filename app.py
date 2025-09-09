@@ -550,7 +550,7 @@ def handle_vote():
         
     try:
         data = request.get_json()
-        track_id = data.get('trackid')
+        track_id = data.get('trackid') or data.get('trackId')
         
         if not track_id:
             return jsonify({"error": "ID de canción requerido"}), 400
