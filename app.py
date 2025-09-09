@@ -562,7 +562,7 @@ def handle_vote():
         try:
             existing_vote = supabase.table('votes')\
                 .select('*')\
-                .eq('trackId', track_id)\
+                .eq('trackid', track_id)\
                 .eq('userFingerprint', user_fingerprint)\
                 .execute()
             
