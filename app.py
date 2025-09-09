@@ -615,7 +615,7 @@ def handle_vote():
                     'preview_url': track_info.get('preview_url', ''),
                     'votes': 1,
                     'lastVoted': datetime.now(timezone.utc).isoformat(),
-                    'createdAt': datetime.now(timezone.utc).isoformat()
+                    'createdat': datetime.now(timezone.utc).isoformat()
                 }
                 supabase.table('song_ranking').insert(song_data).execute()
         except Exception as e:
