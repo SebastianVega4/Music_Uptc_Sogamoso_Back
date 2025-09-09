@@ -290,10 +290,77 @@ def get_admin_currently_playing():
 @app.route('/api/spotify/auth', methods=['GET'])
 def spotify_auth():
     """Iniciar el flujo de autenticación de Spotify para usuarios regulares"""
-    scope = 'user-read-currently-playing user-read-playback-state'
+    scope = 'user-read-currently-playing user-read-playback-state user-modify-playback-state'
     auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}"
     return jsonify({"authUrl": auth_url}), 200
 
+# Endpoint para agregar canciones a la cola de reproducción
+@app.route('/api/spotify/admin/queue', methods=['POST'])
+def add_to_queue():
+    """Agregar una canción a la cola de reproducción de Spotify"""
+    # Verificar autenticación básica
+    if not verify_basic_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    data = request.get_json()
+    track_uri = data.get('uri')
+    
+    if not track_uri:
+        return jsonify({"error": "URI de canción requerida"}), 400
+        
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
+    
+    # Verificar si el token necesita refresco
+    if datetime.now(timezone.utc) > admin_spotify_token['expires_at']:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Agregar a la cola de reproducción
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    response = requests.post(
+        f'https://api.spotify.com/v1/me/player/queue?uri={track_uri}',
+        headers=headers
+    )
+    
+    if response.status_code == 204:
+        return jsonify({"message": "Canción agregada a la cola"}), 200
+    else:
+        return jsonify({"error": f"Error al agregar a la cola: {response.status_code}"}), response.status_code
+
+# Endpoint para obtener la cola de reproducción actual
+@app.route('/api/spotify/admin/queue', methods=['GET'])
+def get_queue():
+    """Obtener la cola de reproducción actual de Spotify"""
+    # Verificar autenticación básica
+    if not verify_basic_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
+    
+    # Verificar si el token necesita refresco
+    if datetime.now(timezone.utc) > admin_spotify_token['expires_at']:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Obtener la cola de reproducción
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    response = requests.get(
+        'https://api.spotify.com/v1/me/player/queue',
+        headers=headers
+    )
+    
+    if response.status_code == 200:
+        queue_data = response.json()
+        return jsonify(queue_data), 200
+    else:
+        return jsonify({"error": f"Error al obtener la cola: {response.status_code}"}), response.status_code
+        
 @app.route('/api/spotify/admin/auth', methods=['GET'])
 def admin_spotify_auth():
     """Iniciar el flujo de autenticación de Spotify para el admin"""
