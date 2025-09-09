@@ -578,13 +578,10 @@ def handle_vote():
         # Registrar el voto
         vote_data = {
             'trackid': track_id,
-            'userFingerprint': user_fingerprint,
-            'ipAddress': request.remote_addr,
-            'userAgent': request.headers.get('User-Agent', ''),
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'name': track_info.get('name', ''),
-            'artists': track_info.get('artists', []),
-            'image': track_info.get('image', '')
+            'userfingerprint': user_fingerprint,
+            'ipaddress': request.remote_addr,
+            'useragent': request.headers.get('User-Agent', ''),
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         # Añadir el voto
