@@ -92,19 +92,18 @@ def verify_basic_auth():
     try:
         # Decodificar las credenciales
         encoded_credentials = auth_header.split('Basic ')[1]
-        decoded_credentials = base64.b64decode(encoded_credentials).decode('utf-8')
         
-        # Verificar contra las credenciales fijas O contra el token almacenado
-        if decoded_credentials == f"{ADMIN_CREDENTIALS['email']}:{ADMIN_CREDENTIALS['password']}":
-            return True
-            
-        # También verificar si es el token almacenado
-        stored_token = localStorage.getItem('adminToken')
-        if stored_token and encoded_credentials == stored_token:
+        # Verificar contra las credenciales fijas
+        expected_credentials = base64.b64encode(
+            f"{ADMIN_CREDENTIALS['email']}:{ADMIN_CREDENTIALS['password']}".encode()
+        ).decode()
+        
+        if encoded_credentials == expected_credentials:
             return True
             
         return False
-    except:
+    except Exception as e:
+        print(f"Error en autenticación básica: {e}")
         return False
 
 def start_spotify_polling():
@@ -371,7 +370,7 @@ def get_queue():
 @app.route('/api/spotify/admin/auth', methods=['GET'])
 def admin_spotify_auth():
     """Iniciar el flujo de autenticación de Spotify para el admin"""
-    scope = 'user-read-currently-playing user-read-playback-state'
+    scope = 'user-read-currently-playing user-read-playback-state user-modify-playback-state'
     auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}&state=admin"
     print(f"🔗 URL de auth de admin: {auth_url}")
     return jsonify({"authUrl": auth_url}), 200
