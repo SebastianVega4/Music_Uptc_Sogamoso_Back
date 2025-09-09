@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from flask_caching import Cache
 from supabase import create_client, Client
 import json
+import base64
 
 app = Flask(__name__)
 
@@ -48,6 +49,12 @@ SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.environ.get("SPOTIFY_REDIRECT_URI", "https://music-uptc-sogamoso.vercel.app/api/spotify/callback")
 
+# Credenciales fijas para el admin
+ADMIN_CREDENTIALS = {
+    "email": "sebastian.vegar2015@gmail.com",
+    "password": "Sebas.01"
+}
+
 # Variables para el admin de Spotify
 admin_spotify_token = None
 currently_playing_cache = None
@@ -75,7 +82,24 @@ def handle_preflight():
         response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
         response.headers.add("Access-Control-Allow-Credentials", "true")
         return response
-    
+
+# Función para verificar autenticación básica
+def verify_basic_auth():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Basic '):
+        return False
+        
+    try:
+        # Decodificar las credenciales
+        encoded_credentials = auth_header.split('Basic ')[1]
+        decoded_credentials = base64.b64decode(encoded_credentials).decode('utf-8')
+        email, password = decoded_credentials.split(':', 1)
+        
+        # Verificar contra las credenciales fijas
+        return email == ADMIN_CREDENTIALS["email"] and password == ADMIN_CREDENTIALS["password"]
+    except:
+        return False
+
 def start_spotify_polling():
     """Iniciar polling para la canción actual del admin"""
     global polling_active
@@ -366,59 +390,49 @@ def admin_spotify_disconnect():
     
     print(f"🔍 Headers recibidos en disconnect: {dict(request.headers)}")
     
-    # Verificar autenticación para operaciones de admin
-    auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        print("❌ No se encontró header Authorization")
-        return jsonify({"error": "Token de autorización requerido"}), 401
+    # Verificar autenticación básica
+    if not verify_basic_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
         
-    if not auth_header.startswith('Bearer '):
-        print(f"❌ Formato de Authorization incorrecto: {auth_header}")
-        return jsonify({"error": "Formato de token incorrecto"}), 401
+    # Limpiar datos de Spotify del admin
+    admin_spotify_token = None
+    currently_playing_cache = None
+    polling_active = False
+    
+    # Eliminar de la base de datos
+    try:
+        supabase.table('admin_settings').delete().eq('id', 'spotify').execute()
+        print("✅ Token eliminado de Supabase")
+    except Exception as e:
+        print(f"Error eliminando token de BD: {e}")
+    
+    return jsonify({"message": "Spotify desconectado correctamente"}), 200
+
+# Endpoint para autenticación básica
+@app.route('/api/auth', methods=['POST', 'OPTIONS'])
+def handle_auth():
+    if request.method == 'OPTIONS':
+        return '', 200
         
     try:
-        # En Supabase, la autenticación se maneja diferente
-        # Por ahora, permitimos la desconexión sin verificación detallada
-        # ya que el frontend ya validó al usuario
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
         
-        # Limpiar datos de Spotify del admin
-        admin_spotify_token = None
-        currently_playing_cache = None
-        polling_active = False
-        
-        # Eliminar de la base de datos
-        try:
-            supabase.table('admin_settings').delete().eq('id', 'spotify').execute()
-            print("✅ Token eliminado de Supabase")
-        except Exception as e:
-            print(f"Error eliminando token de BD: {e}")
-        
-        return jsonify({"message": "Spotify desconectado correctamente"}), 200
+        if email == ADMIN_CREDENTIALS["email"] and password == ADMIN_CREDENTIALS["password"]:
+            # Crear un token básico (solo para compatibilidad con frontend)
+            token = base64.b64encode(f"{email}:{password}".encode()).decode()
+            return jsonify({
+                "success": True,
+                "token": token,
+                "message": "Autenticación exitosa"
+            }), 200
+        else:
+            return jsonify({"error": "Credenciales inválidas"}), 401
             
     except Exception as e:
-        print(f"❌ Error al desconectar Spotify: {e}")
+        print(f"Error en autenticación: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
-
-# Configurar Spotify
-try:
-    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
-        client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
-        client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET")
-    ))
-    print("✅ Spotify configurado correctamente")
-except Exception as e:
-    print(f"❌ Error configurando Spotify: {e}")
-    sp = None
-
-# Middleware simplificado para OPTIONS
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        response = jsonify()
-        response.headers.add("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        response.headers.add("Access-Control-Allow-Credentials", "true")
-        return response
 
 @app.route('/api/spotify/currently-playing', methods=['GET'])
 def get_currently_playing():
@@ -463,73 +477,22 @@ def get_currently_playing():
     else:
         return jsonify({"error": "Error al obtener información de reproducción"}), response.status_code
 
-def refresh_admin_spotify_token():
-    """Refrescar el token de Spotify del admin"""
-    global admin_spotify_token
-    
-    if not admin_spotify_token or 'refresh_token' not in admin_spotify_token:
-        return False
-        
-    refresh_token = admin_spotify_token['refresh_token']
-    token_url = "https://accounts.spotify.com/api/token"
-    
-    data = {
-        'grant_type': 'refresh_token',
-        'refresh_token': refresh_token,
-        'client_id': SPOTIFY_CLIENT_ID,
-        'client_secret': SPOTIFY_CLIENT_SECRET
-    }
-    
-    response = requests.post(token_url, data=data)
-    if response.status_code != 200:
-        return False
-        
-    token_data = response.json()
-    admin_spotify_token['access_token'] = token_data['access_token']
-    admin_spotify_token['expires_at'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
-    
-    if 'refresh_token' in token_data:
-        admin_spotify_token['refresh_token'] = token_data['refresh_token']
-        
-    # Guardar en base de datos
-    try:
-        supabase.table('admin_settings').upsert({
-            'id': 'spotify',
-            'token_data': admin_spotify_token,
-            'updated_at': datetime.now(timezone.utc).isoformat()
-        }).execute()
-    except Exception as e:
-        print(f"Error guardando token en BD: {e}")
-            
-    return True
-
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Endpoint para verificar el estado del servicio"""
+    # Verificar conexión a Supabase
+    supabase_status = "connected"
+    try:
+        supabase.table('admin_settings').select('count', count='exact').execute()
+    except Exception as e:
+        supabase_status = f"disconnected: {str(e)}"
+    
     status = {
-        "database": "connected",
+        "database": supabase_status,
         "spotify": "connected" if sp else "disconnected",
-        "status": "ok" if sp else "degraded"
+        "status": "ok" if sp and supabase_status == "connected" else "degraded"
     }
     return jsonify(status), 200
-
-@app.route('/api/auth', methods=['POST', 'OPTIONS'])
-def handle_auth():
-    if request.method == 'OPTIONS':
-        return '', 200
-        
-    try:
-        data = request.get_json()
-        # En Supabase, la autenticación se manejaría diferente
-        # Por ahora, devolvemos un éxito básico para compatibilidad
-        return jsonify({
-            "success": True,
-            "message": "Autenticación exitosa (modo compatibilidad)"
-        }), 200
-        
-    except Exception as e:
-        print(f"Error en autenticación: {e}")
-        return jsonify({"error": "Error interno del servidor"}), 500
 
 @app.route('/api/search', methods=['GET', 'OPTIONS'])
 def handle_search():
@@ -706,10 +669,9 @@ def handle_votes():
 @app.route('/api/votes', methods=['DELETE'])
 def handle_delete_votes():
     try:
-        # Verificar autenticación para operaciones de eliminación
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({"error": "Token de autorización requerido"}), 401
+        # Verificar autenticación básica
+        if not verify_basic_auth():
+            return jsonify({"error": "Credenciales inválidas"}), 401
             
         # Obtener trackId de los parámetros de consulta
         track_id = request.args.get('trackId')
@@ -734,10 +696,9 @@ def delete_all_votes():
         return '', 200
         
     try:
-        # Verificar autenticación
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({"error": "Token de autorización requerido"}), 401
+        # Verificar autenticación básica
+        if not verify_basic_auth():
+            return jsonify({"error": "Credenciales inválidas"}), 401
             
         # Eliminar todos los votos
         supabase.table('votes').delete().neq('id', 0).execute()
@@ -745,7 +706,7 @@ def delete_all_votes():
         # Eliminar todas las canciones del ranking
         supabase.table('song_ranking').delete().neq('id', '').execute()
             
-        return jsonify({"message": "Todos los votos han sido eliminados"}), 500
+        return jsonify({"message": "Todos los votos han sido eliminados"}), 200
             
     except Exception as e:
         print(f"Error al eliminar todos los votos: {e}")
