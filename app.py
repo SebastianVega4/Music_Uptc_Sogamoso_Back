@@ -601,7 +601,7 @@ def handle_vote():
                 supabase.table('song_ranking')\
                     .update({
                         'votes': current_votes + 1,
-                        'lastVoted': datetime.now(timezone.utc).isoformat()
+                        'lastvoted': datetime.now(timezone.utc).isoformat()
                     })\
                     .eq('id', track_id)\
                     .execute()
@@ -614,7 +614,7 @@ def handle_vote():
                     'image': track_info.get('image', ''),
                     'preview_url': track_info.get('preview_url', ''),
                     'votes': 1,
-                    'lastVoted': datetime.now(timezone.utc).isoformat(),
+                    'lastvoted': datetime.now(timezone.utc).isoformat(),
                     'createdat': datetime.now(timezone.utc).isoformat()
                 }
                 supabase.table('song_ranking').insert(song_data).execute()
@@ -653,7 +653,7 @@ def handle_votes():
                 'image': song['image'],
                 'preview_url': song['preview_url'],
                 'votes': song['votes'],
-                'createdAt': song['lastVoted']  # Usar lastVoted como createdAt para compatibilidad
+                'createdat': song['lastvoted'] 
             }
             formatted_songs.append(formatted_song)
         
