@@ -530,7 +530,7 @@ def login():
         # Generar token JWT
         token = jwt.encode({
             'user_id': user['id'],
-            'exp': datetime.datetime.now(timezone.utc) + datetime.timedelta(hours=24)
+            'exp': datetime.now(timezone.utc) + timedelta(hours=24)
         }, JWT_SECRET, algorithm=JWT_ALGORITHM)
         
         return jsonify({
