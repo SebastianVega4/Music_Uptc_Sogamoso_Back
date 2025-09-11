@@ -235,7 +235,7 @@ def refresh_admin_spotify_token():
     global admin_spotify_token
     
     if not admin_spotify_token or 'refresh_token' not in admin_spotify_token:
-        print("❌ No hay refresh token disponible")
+        print("❌ No hay refresh token disponible para refrescar")
         return False
         
     refresh_token = admin_spotify_token['refresh_token']
@@ -260,8 +260,12 @@ def refresh_admin_spotify_token():
         # Usar UTC consistentemente
         admin_spotify_token['expires_at'] = datetime.now(timezone.utc) + timedelta(seconds=token_data['expires_in'])
         
+        # Spotify puede o no devolver un nuevo refresh_token
         if 'refresh_token' in token_data:
             admin_spotify_token['refresh_token'] = token_data['refresh_token']
+            print("✅ Nuevo refresh_token recibido")
+        else:
+            print("ℹ️  Mismo refresh_token mantenido")
             
         # Guardar en base de datos
         try:
@@ -272,7 +276,7 @@ def refresh_admin_spotify_token():
             }).execute()
             print("✅ Token refrescado y guardado en Supabase")
         except Exception as e:
-            print(f"❌ Error guardando token en BD: {e}")
+            print(f"❌ Error guardando token refrescado en BD: {e}")
             
         return True
         
@@ -280,6 +284,30 @@ def refresh_admin_spotify_token():
         print(f"❌ Error en refresh_admin_spotify_token: {e}")
         return False
 
+@app.route('/api/spotify/admin/reconnect', methods=['POST'])
+def admin_spotify_reconnect():
+    """Forzar reconexión completa de Spotify"""
+    global admin_spotify_token, polling_active
+    
+    # Verificar autenticación
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+    
+    # Detener polling actual
+    polling_active = False
+    
+    # Limpiar token existente
+    admin_spotify_token = None
+    
+    # Eliminar de la base de datos
+    try:
+        supabase.table('admin_settings').delete().eq('id', 'spotify').execute()
+        print("✅ Configuración de Spotify eliminada para reconexión")
+    except Exception as e:
+        print(f"Error eliminando configuración: {e}")
+    
+    return jsonify({"message": "Listo para reconectar Spotify"}), 200
+    
 @app.route('/api/spotify/admin/check-playing-song', methods=['POST'])
 def check_playing_song():
     """Verificar si la canción en reproducción está en el ranking y eliminarla"""
@@ -327,7 +355,7 @@ def check_playing_song():
     except Exception as e:
         print(f"❌ Error al verificar/eliminar canción: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
-        
+
 # Nuevo endpoint para obtener la canción actual del admin
 @app.route('/api/spotify/admin/currently-playing', methods=['GET'])
 def get_admin_currently_playing():
@@ -527,17 +555,26 @@ def spotify_callback():
         
     token_data = response.json()
     access_token = token_data['access_token']
-    refresh_token = token_data.get('refresh_token')
+    refresh_token = token_data.get('refresh_token')  # Asegurar que obtenemos el refresh_token
     expires_in = token_data['expires_in']
     
     # Determinar si es para el admin o para usuario general
     if state == 'admin':
         global admin_spotify_token
         
+        # Asegurar que tenemos refresh_token
+        if not refresh_token:
+            # Si no hay refresh_token en la respuesta, intentar usar uno existente
+            if admin_spotify_token and 'refresh_token' in admin_spotify_token:
+                refresh_token = admin_spotify_token['refresh_token']
+            else:
+                print("❌ Error: No se obtuvo refresh_token en la autenticación")
+                return jsonify({"error": "Error de autenticación: falta refresh_token"}), 400
+        
         # Guardar token del admin - usar UTC
         admin_spotify_token = {
             'access_token': access_token,
-            'refresh_token': refresh_token,
+            'refresh_token': refresh_token,  # Asegurar que guardamos el refresh_token
             'expires_at': datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         }
         
@@ -548,7 +585,7 @@ def spotify_callback():
                 'token_data': admin_spotify_token,
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }).execute()
-            print("✅ Token de admin guardado en Supabase")
+            print("✅ Token de admin guardado en Supabase con refresh_token")
         except Exception as e:
             print(f"Error guardando token en BD: {e}")
         
@@ -561,7 +598,7 @@ def spotify_callback():
         # Redirigir al panel de administración con mensaje de éxito
         return redirect('https://music-uptc-sogamoso.vercel.app/admin-panel?spotify_connected=true')
     else:
-        # Para usuarios regulares (si es necesario en el futuro)
+        # Para usuarios regulares
         return jsonify({
             "message": "Autenticación exitosa", 
             "access_token": access_token
@@ -1090,35 +1127,46 @@ def delete_all_votes():
     
 # Cargar token del admin desde la base de datos al iniciar la aplicación
 def load_admin_spotify_token():
-    """Cargar el token de Spotify del admin desde la base de datos con verificación"""
+    """Cargar el token de Spotify del admin desde la base de datos con verificación robusta"""
     global admin_spotify_token, polling_thread, polling_active
     
     try:
         result = supabase.table('admin_settings').select('*').eq('id', 'spotify').execute()
         if result.data and len(result.data) > 0:
-            admin_spotify_token = result.data[0]['token_data']
+            stored_token = result.data[0]['token_data']
             
-            # Verificar que el token tenga la estructura correcta
-            if (admin_spotify_token and 
-                'access_token' in admin_spotify_token and 
-                'refresh_token' in admin_spotify_token and 
-                'expires_at' in admin_spotify_token):
-                
-                # Verificar si el token necesita refresco
-                expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
-                if datetime.now(timezone.utc) > expires_at:
-                    print("🔄 Token cargado está expirado, refrescando...")
-                    if refresh_admin_spotify_token():
-                        polling_thread = start_spotify_polling()
-                    else:
-                        print("❌ No se pudo refrescar el token cargado")
-                        admin_spotify_token = None
-                else:
-                    print("✅ Token cargado válido, iniciando polling...")
-                    polling_thread = start_spotify_polling()
-            else:
-                print("❌ Token cargado tiene estructura inválida")
+            # Verificación robusta de la estructura del token
+            required_fields = ['access_token', 'refresh_token', 'expires_at']
+            if not all(field in stored_token for field in required_fields):
+                print("❌ Token almacenado tiene estructura inválida, campos faltantes:", 
+                      [field for field in required_fields if field not in stored_token])
                 admin_spotify_token = None
+                return
+            
+            admin_spotify_token = stored_token
+            
+            # Verificar si el token necesita refresco
+            expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+            time_until_expiry = expires_at - datetime.now(timezone.utc)
+            
+            if time_until_expiry.total_seconds() <= 0:
+                print("🔄 Token cargado está expirado, intentando refrescar...")
+                if refresh_admin_spotify_token():
+                    print("✅ Token refrescado exitosamente")
+                    polling_thread = start_spotify_polling()
+                else:
+                    print("❌ No se pudo refrescar el token cargado")
+                    admin_spotify_token = None
+            elif time_until_expiry.total_seconds() < 300:  # Menos de 5 minutos
+                print("🔄 Token expirará pronto, refrescando preventivamente...")
+                if refresh_admin_spotify_token():
+                    print("✅ Token refrescado preventivamente")
+                    polling_thread = start_spotify_polling()
+                else:
+                    print("❌ No se pudo refrescar el token preventivamente")
+            else:
+                print(f"✅ Token cargado válido (expira en {int(time_until_expiry.total_seconds()/60)} minutos), iniciando polling...")
+                polling_thread = start_spotify_polling()
                 
     except Exception as e:
         print(f"❌ Error cargando token de admin: {e}")
