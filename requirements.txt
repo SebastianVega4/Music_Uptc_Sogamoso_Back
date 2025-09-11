@@ -6,3 +6,4 @@ python-dotenv==1.0.0
 supabase==2.5.0
 flask-caching==2.0.2
 requests==2.31.0
+bcrypt==4.1.2 

@@ -83,11 +83,13 @@ def handle_preflight():
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "846d56ad337d10a3")
 JWT_ALGORITHM = "HS256"
+
 # Función para verificar autenticación
 def verify_jwt_auth():
     """Verificar autenticación JWT"""
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
+        print("❌ No hay token de autorización")
         return False
         
     try:
@@ -97,10 +99,12 @@ def verify_jwt_auth():
         # Verificar si el usuario existe en la base de datos y es admin
         result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
         if not result.data:
+            print(f"❌ Usuario no encontrado: {payload['user_id']}")
             return False
             
         return True
-    except:
+    except Exception as e:
+        print(f"❌ Error decodificando token: {e}")
         return False
 
 def start_spotify_polling():
