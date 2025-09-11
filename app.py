@@ -515,63 +515,6 @@ def login():
     except Exception as e:
         print(f"Error en login: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
-
-# Ruta para crear usuario admin inicial (ejecutar una sola vez)
-@app.route('/api/auth/setup', methods=['POST'])
-def setup_admin():
-    """Crear usuario administrador inicial"""
-    try:
-        data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
-        
-        if not email or not password:
-            return jsonify({"error": "Email y contraseña son requeridos"}), 400
-            
-        # Verificar si ya existe un admin
-        result = supabase.table('admin_users').select('*').execute()
-        if result.data:
-            return jsonify({"error": "Ya existe un usuario administrador"}), 400
-            
-        # Hash de la contraseña
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        
-        # Insertar usuario
-        user_result = supabase.table('admin_users').insert({
-            'email': email,
-            'password_hash': hashed_password
-        }).execute()
-        
-        if not user_result.data:
-            return jsonify({"error": "Error al crear usuario"}), 500
-        
-        # Insertar horarios por defecto (con manejo de errores)
-        try:
-            default_schedules = [
-                {'day_of_week': 0, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Domingo
-                {'day_of_week': 1, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Lunes
-                {'day_of_week': 2, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Martes
-                {'day_of_week': 3, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Miércoles
-                {'day_of_week': 4, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Jueves
-                {'day_of_week': 5, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Viernes
-                {'day_of_week': 6, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Sábado
-            ]
-            
-            schedule_result = supabase.table('music_schedules').insert(default_schedules).execute()
-            print(f"Horarios creados: {len(schedule_result.data)}")
-            
-        except Exception as schedule_error:
-            print(f"Advertencia: Error creando horarios por defecto: {schedule_error}")
-            # No fallar completamente si los horarios no se pueden crear
-            
-        return jsonify({
-            "message": "Usuario administrador creado correctamente",
-            "user_id": user_result.data[0]['id']
-        }), 200
-            
-    except Exception as e:
-        print(f"Error creando admin: {e}")
-        return jsonify({"error": "Error interno del servidor"}), 500
         
 # Endpoint para autenticación
 @app.route('/api/auth', methods=['POST', 'OPTIONS'])
