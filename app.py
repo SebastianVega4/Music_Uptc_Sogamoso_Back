@@ -280,6 +280,54 @@ def refresh_admin_spotify_token():
         print(f"❌ Error en refresh_admin_spotify_token: {e}")
         return False
 
+@app.route('/api/spotify/admin/check-playing-song', methods=['POST'])
+def check_playing_song():
+    """Verificar si la canción en reproducción está en el ranking y eliminarla"""
+    # Verificar autenticación
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    global admin_spotify_token, currently_playing_cache
+    
+    # Verificar si hay una canción reproduciéndose
+    if not currently_playing_cache or not currently_playing_cache.get('is_playing'):
+        return jsonify({"message": "No hay canción reproduciéndose", "deleted": False}), 200
+    
+    track_id = currently_playing_cache.get('id')
+    if not track_id:
+        return jsonify({"message": "No se pudo obtener ID de la canción", "deleted": False}), 200
+    
+    try:
+        # Verificar si la canción existe en el ranking
+        result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
+        
+        if result.data and len(result.data) > 0:
+            # Eliminar la canción del ranking
+            supabase.table('song_ranking').delete().eq('id', track_id).execute()
+            
+            # También eliminar todos los votos asociados a esta canción
+            supabase.table('votes').delete().eq('trackid', track_id).execute()
+            
+            print(f"✅ Canción {track_id} eliminada por estar en reproducción")
+            return jsonify({
+                "message": "Canción eliminada del ranking por estar en reproducción",
+                "deleted": True,
+                "song": {
+                    "id": track_id,
+                    "name": currently_playing_cache.get('name'),
+                    "artists": currently_playing_cache.get('artists')
+                }
+            }), 200
+        else:
+            return jsonify({
+                "message": "La canción no está en el ranking",
+                "deleted": False
+            }), 200
+            
+    except Exception as e:
+        print(f"❌ Error al verificar/eliminar canción: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+        
 # Nuevo endpoint para obtener la canción actual del admin
 @app.route('/api/spotify/admin/currently-playing', methods=['GET'])
 def get_admin_currently_playing():
