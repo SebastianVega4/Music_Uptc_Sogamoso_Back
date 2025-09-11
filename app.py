@@ -860,7 +860,7 @@ def handle_votes():
                 'image': song['image'],
                 'preview_url': song['preview_url'],
                 'votes': song['votes'],
-                'createdat': song['lastvoted'] 
+                'createdat': song['createdat'] 
             }
             formatted_songs.append(formatted_song)
         
