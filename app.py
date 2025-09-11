@@ -834,12 +834,13 @@ def handle_vote():
                     }), 200
             else:
                 # Crear nueva entrada en el ranking
+                track_info_data = data.get('trackInfo', {})
                 song_data = {
                     'id': track_id,
-                    'name': track_info.get('name', ''),
-                    'artists': track_info.get('artists', []),
-                    'image': track_info.get('image', ''),
-                    'preview_url': track_info.get('preview_url', ''),
+                    'name': track_info_data.get('name', ''),
+                    'artists': track_info_data.get('artists', []),
+                    'image': track_info_data.get('image', ''),
+                    'preview_url': track_info_data.get('preview_url', ''),
                     'votes': 0 if is_dislike else 1,
                     'dislikes': 1 if is_dislike else 0,
                     'lastvoted': datetime.now(timezone.utc).isoformat(),
