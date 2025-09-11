@@ -825,8 +825,8 @@ def handle_vote():
                     .eq('id', track_id)\
                     .execute()
                     
-                # Verificar si la canción tiene 20 dislikes y eliminarla
-                if is_dislike and update_data['dislikes'] >= 20:
+                # Verificar si la canción tiene 10 dislikes y eliminarla
+                if is_dislike and update_data['dislikes'] >= 10:
                     delete_song_from_ranking(track_id)
                     return jsonify({
                         "message": "Dislike registrado correctamente", 
@@ -848,7 +848,7 @@ def handle_vote():
                 supabase.table('song_ranking').insert(song_data).execute()
                 
                 # Si es un dislike y alcanza el límite inmediatamente (poco probable pero posible)
-                if is_dislike and song_data['dislikes'] >= 20:
+                if is_dislike and song_data['dislikes'] >= 10:
                     delete_song_from_ranking(track_id)
                     return jsonify({
                         "message": "Dislike registrado correctamente", 
@@ -903,8 +903,8 @@ def change_vote(track_id, user_fingerprint, new_is_dislike, track_info):
                 .eq('id', track_id)\
                 .execute()
                 
-            # Verificar si la canción tiene 20 dislikes después del cambio
-            if new_is_dislike and update_data['dislikes'] >= 20:
+            # Verificar si la canción tiene 10 dislikes después del cambio
+            if new_is_dislike and update_data['dislikes'] >= 10:
                 delete_song_from_ranking(track_id)
                 return jsonify({
                     "message": "Voto cambiado correctamente", 
@@ -929,7 +929,7 @@ def delete_song_from_ranking(track_id):
         # También eliminar todos los votos asociados a esta canción
         supabase.table('votes').delete().eq('trackid', track_id).execute()
         
-        print(f"✅ Canción {track_id} eliminada por alcanzar 20 dislikes")
+        print(f"✅ Canción {track_id} eliminada por alcanzar 10 dislikes")
     except Exception as e:
         print(f"Error eliminando canción por dislikes: {e}")
 
