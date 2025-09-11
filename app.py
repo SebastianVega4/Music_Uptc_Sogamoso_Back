@@ -13,6 +13,10 @@ from flask_caching import Cache
 from supabase import create_client, Client
 import json
 import base64
+import bcrypt
+import jwt
+from datetime import datetime, timedelta, timezone
+
 
 app = Flask(__name__)
 
@@ -177,6 +181,28 @@ def start_spotify_polling():
     thread.start()
     print("✅ Hilo de polling iniciado")
     return thread
+
+JWT_SECRET = os.environ.get("JWT_SECRET", "846d56ad337d10a3")
+JWT_ALGORITHM = "HS256"
+
+def verify_jwt_auth():
+    """Verificar autenticación JWT"""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return False
+        
+    try:
+        token = auth_header.split('Bearer ')[1]
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        # Verificar si el usuario existe en la base de datos
+        result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
+        if not result.data:
+            return False
+            
+        return True
+    except:
+        return False
 
 def ensure_aware_datetime(dt):
     """Asegurar que un datetime sea timezone-aware (UTC)"""
@@ -481,6 +507,86 @@ def admin_spotify_disconnect():
     
     return jsonify({"message": "Spotify desconectado correctamente"}), 200
 
+# Ruta de login mejorada
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Iniciar sesión con JWT"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        
+        # Buscar usuario en la base de datos
+        result = supabase.table('admin_users').select('*').eq('email', email).execute()
+        if not result.data:
+            return jsonify({"error": "Credenciales inválidas"}), 401
+            
+        user = result.data[0]
+        
+        # Verificar contraseña
+        if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+            return jsonify({"error": "Credenciales inválidas"}), 401
+            
+        # Generar token JWT
+        token = jwt.encode({
+            'user_id': user['id'],
+            'exp': datetime.now(timezone.utc) + timedelta(hours=24)
+        }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        
+        return jsonify({
+            "token": token,
+            "user": {
+                "id": user['id'],
+                "email": user['email']
+            }
+        }), 200
+            
+    except Exception as e:
+        print(f"Error en login: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+# Ruta para crear usuario admin inicial (ejecutar una sola vez)
+@app.route('/api/auth/setup', methods=['POST'])
+def setup_admin():
+    """Crear usuario administrador inicial"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        
+        # Verificar si ya existe un admin
+        result = supabase.table('admin_users').select('*').execute()
+        if result.data:
+            return jsonify({"error": "Ya existe un usuario administrador"}), 400
+            
+        # Hash de la contraseña
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
+        # Insertar usuario
+        supabase.table('admin_users').insert({
+            'email': email,
+            'password_hash': hashed_password
+        }).execute()
+        
+        # Insertar horarios por defecto
+        default_schedules = [
+            {'day_of_week': 0, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Domingo
+            {'day_of_week': 1, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Lunes
+            {'day_of_week': 2, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Martes
+            {'day_of_week': 3, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Miércoles
+            {'day_of_week': 4, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Jueves
+            {'day_of_week': 5, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Viernes
+            {'day_of_week': 6, 'lunch_start': '12:00', 'lunch_end': '14:00', 'dinner_start': '18:00', 'dinner_end': '20:00'}, # Sábado
+        ]
+        
+        supabase.table('music_schedules').insert(default_schedules).execute()
+        
+        return jsonify({"message": "Usuario administrador creado correctamente"}), 200
+            
+    except Exception as e:
+        print(f"Error creando admin: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+        
 # Endpoint para autenticación básica
 @app.route('/api/auth', methods=['POST', 'OPTIONS'])
 def handle_auth():
@@ -803,6 +909,43 @@ def load_admin_spotify_token():
                     polling_thread = start_spotify_polling()
     except Exception as e:
         print(f"Error cargando token de admin: {e}")
+
+@app.route('/api/schedules', methods=['GET'])
+def get_schedules():
+    """Obtener todos los horarios de música"""
+    try:
+        result = supabase.table('music_schedules').select('*').order('day_of_week').execute()
+        return jsonify(result.data), 200
+    except Exception as e:
+        print(f"Error obteniendo horarios: {e}")
+        return jsonify({"error": "Error al obtener horarios"}), 500
+
+# Ruta para actualizar horarios (requiere autenticación)
+@app.route('/api/schedules', methods=['PUT'])
+def update_schedules():
+    """Actualizar horarios de música"""
+    # Verificar autenticación
+    if not verify_jwt_auth():
+        return jsonify({"error": "No autorizado"}), 401
+        
+    try:
+        data = request.get_json()
+        
+        # Actualizar cada horario
+        for schedule in data:
+            supabase.table('music_schedules').update({
+                'lunch_start': schedule.get('lunch_start'),
+                'lunch_end': schedule.get('lunch_end'),
+                'dinner_start': schedule.get('dinner_start'),
+                'dinner_end': schedule.get('dinner_end'),
+                'is_active': schedule.get('is_active', True),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }).eq('id', schedule['id']).execute()
+            
+        return jsonify({"message": "Horarios actualizados correctamente"}), 200
+    except Exception as e:
+        print(f"Error actualizando horarios: {e}")
+        return jsonify({"error": "Error al actualizar horarios"}), 500
 
 # Llamar a la función de carga al iniciar
 load_admin_spotify_token()
