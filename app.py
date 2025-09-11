@@ -53,12 +53,6 @@ SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.environ.get("SPOTIFY_REDIRECT_URI", "https://music-uptc-sogamoso.vercel.app/api/spotify/callback")
 
-# Credenciales fijas para el admin
-ADMIN_CREDENTIALS = {
-    "email": "sebastian.vegar2015@gmail.com",
-    "password": "Sebas.01"
-}
-
 # Variables para el admin de Spotify
 admin_spotify_token = None
 currently_playing_cache = None
@@ -87,27 +81,26 @@ def handle_preflight():
         response.headers.add("Access-Control-Allow-Credentials", "true")
         return response
 
-# Función para verificar autenticación básica
-def verify_basic_auth():
+JWT_SECRET = os.environ.get("JWT_SECRET", "846d56ad337d10a3")
+JWT_ALGORITHM = "HS256"
+# Función para verificar autenticación
+def verify_jwt_auth():
+    """Verificar autenticación JWT"""
     auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Basic '):
+    if not auth_header or not auth_header.startswith('Bearer '):
         return False
         
     try:
-        # Decodificar las credenciales
-        encoded_credentials = auth_header.split('Basic ')[1]
+        token = auth_header.split('Bearer ')[1]
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         
-        # Verificar contra las credenciales fijas
-        expected_credentials = base64.b64encode(
-            f"{ADMIN_CREDENTIALS['email']}:{ADMIN_CREDENTIALS['password']}".encode()
-        ).decode()
-        
-        if encoded_credentials == expected_credentials:
-            return True
+        # Verificar si el usuario existe en la base de datos y es admin
+        result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
+        if not result.data:
+            return False
             
-        return False
-    except Exception as e:
-        print(f"Error en autenticación básica: {e}")
+        return True
+    except:
         return False
 
 def start_spotify_polling():
@@ -181,28 +174,6 @@ def start_spotify_polling():
     thread.start()
     print("✅ Hilo de polling iniciado")
     return thread
-
-JWT_SECRET = os.environ.get("JWT_SECRET", "846d56ad337d10a3")
-JWT_ALGORITHM = "HS256"
-
-def verify_jwt_auth():
-    """Verificar autenticación JWT"""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return False
-        
-    try:
-        token = auth_header.split('Bearer ')[1]
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        
-        # Verificar si el usuario existe en la base de datos
-        result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
-        if not result.data:
-            return False
-            
-        return True
-    except:
-        return False
 
 def ensure_aware_datetime(dt):
     """Asegurar que un datetime sea timezone-aware (UTC)"""
@@ -331,7 +302,7 @@ def spotify_auth():
 def add_to_queue():
     """Agregar una canción a la cola de reproducción de Spotify"""
     # Verificar autenticación básica
-    if not verify_basic_auth():
+    if not verify_jwt_auth():
         return jsonify({"error": "Credenciales inválidas"}), 401
         
     data = request.get_json()
@@ -367,7 +338,7 @@ def add_to_queue():
 def get_queue():
     """Obtener la cola de reproducción actual de Spotify"""
     # Verificar autenticación básica
-    if not verify_basic_auth():
+    if not verify_jwt_auth():
         return jsonify({"error": "Credenciales inválidas"}), 401
         
     if not admin_spotify_token or not admin_spotify_token.get('access_token'):
@@ -489,8 +460,8 @@ def admin_spotify_disconnect():
     
     print(f"🔍 Headers recibidos en disconnect: {dict(request.headers)}")
     
-    # Verificar autenticación básica
-    if not verify_basic_auth():
+    # Verificar autenticación
+    if not verify_jwt_auth():
         return jsonify({"error": "Credenciales inválidas"}), 401
         
     # Limpiar datos de Spotify del admin
@@ -587,27 +558,44 @@ def setup_admin():
         print(f"Error creando admin: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
         
-# Endpoint para autenticación básica
+# Endpoint para autenticación
 @app.route('/api/auth', methods=['POST', 'OPTIONS'])
 def handle_auth():
     if request.method == 'OPTIONS':
         return '', 200
         
     try:
+        # Redirigir al nuevo endpoint de login con JWT
         data = request.get_json()
         email = data.get('email')
         password = data.get('password')
         
-        if email == ADMIN_CREDENTIALS["email"] and password == ADMIN_CREDENTIALS["password"]:
-            # Crear un token básico (solo para compatibilidad con frontend)
-            token = base64.b64encode(f"{email}:{password}".encode()).decode()
-            return jsonify({
-                "success": True,
-                "token": token,
-                "message": "Autenticación exitosa"
-            }), 200
-        else:
+        # Buscar usuario en la base de datos
+        result = supabase.table('admin_users').select('*').eq('email', email).execute()
+        if not result.data:
             return jsonify({"error": "Credenciales inválidas"}), 401
+            
+        user = result.data[0]
+        
+        # Verificar contraseña
+        if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+            return jsonify({"error": "Credenciales inválidas"}), 401
+            
+        # Generar token JWT
+        token = jwt.encode({
+            'user_id': user['id'],
+            'exp': datetime.now(timezone.utc) + timedelta(hours=24)
+        }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        
+        return jsonify({
+            "success": True,
+            "token": token,
+            "user": {
+                "id": user['id'],
+                "email": user['email']
+            },
+            "message": "Autenticación exitosa"
+        }), 200
             
     except Exception as e:
         print(f"Error en autenticación: {e}")
@@ -846,7 +834,7 @@ def handle_votes():
 def handle_delete_votes():
     try:
         # Verificar autenticación básica
-        if not verify_basic_auth():
+        if not verify_jwt_auth():
             return jsonify({"error": "Credenciales inválidas"}), 401
             
         # Obtener trackId de los parámetros de consulta
@@ -872,8 +860,8 @@ def delete_all_votes():
         return '', 200
         
     try:
-        # Verificar autenticación básica
-        if not verify_basic_auth():
+        # Verificar autenticación 
+        if not verify_jwt_auth():
             return jsonify({"error": "Credenciales inválidas"}), 401
             
         # Eliminar todos los votos
