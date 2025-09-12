@@ -1548,6 +1548,86 @@ def get_schedules():
         print(f"Error obteniendo horarios: {e}")
         return jsonify({"error": "Error al obtener horarios"}), 500
 
+@app.route('/api/ranking/force-rank-current', methods=['POST'])
+def force_rank_current_song():
+    """Forzar el ranking de la canción actualmente en reproducción"""
+    # Verificar autenticación
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    global admin_spotify_token, currently_playing_cache
+    
+    # Verificar si hay una canción reproduciéndose
+    if not currently_playing_cache or not currently_playing_cache.get('is_playing'):
+        return jsonify({"error": "No hay canción reproduciéndose"}), 400
+    
+    track_id = currently_playing_cache.get('id')
+    if not track_id:
+        return jsonify({"error": "No se pudo obtener ID de la canción"}), 400
+    
+    try:
+        # Verificar si la canción ya existe en el ranking histórico
+        result = supabase.table('song_history').select('*').eq('track_id', track_id).execute()
+        
+        current_time = datetime.now(timezone.utc).isoformat()
+        
+        if result.data and len(result.data) > 0:
+            # Actualizar canción existente
+            existing_song = result.data[0]
+            update_data = {
+                'times_played': existing_song['times_played'] + 1,
+                'last_played_at': current_time,
+                'updated_at': current_time
+            }
+            
+            supabase.table('song_history')\
+                .update(update_data)\
+                .eq('track_id', track_id)\
+                .execute()
+                
+            return jsonify({
+                "message": "Canción actualizada en histórico",
+                "action": "updated",
+                "song": {
+                    "id": track_id,
+                    "name": currently_playing_cache.get('name'),
+                    "artists": currently_playing_cache.get('artists')
+                }
+            }), 200
+        else:
+            # Crear nueva entrada en el histórico
+            new_song = {
+                'track_id': track_id,
+                'name': currently_playing_cache.get('name'),
+                'artists': currently_playing_cache.get('artists'),
+                'image': currently_playing_cache.get('image', ''),
+                'preview_url': currently_playing_cache.get('preview_url', ''),
+                'total_votes': 0,
+                'total_dislikes': 0,
+                'times_played': 1,
+                'last_played_at': current_time,
+                'first_played_at': current_time,
+                'created_at': current_time,
+                'updated_at': current_time
+            }
+            
+            # Insertar en la base de datos
+            supabase.table('song_history').insert(new_song).execute()
+            
+            return jsonify({
+                "message": "Canción agregada al histórico",
+                "action": "created",
+                "song": {
+                    "id": track_id,
+                    "name": currently_playing_cache.get('name'),
+                    "artists": currently_playing_cache.get('artists')
+                }
+            }), 201
+            
+    except Exception as e:
+        print(f"❌ Error al forzar ranking: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+        
 # Ruta para actualizar horarios (requiere autenticación)
 @app.route('/api/schedules', methods=['PUT'])
 def update_schedules():
