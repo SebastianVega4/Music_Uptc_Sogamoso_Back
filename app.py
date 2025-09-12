@@ -48,7 +48,6 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-router = APIRouter()
 # Variables globales para Spotify OAuth
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
@@ -1250,9 +1249,12 @@ def get_schedules():
         print(f"Error obteniendo horarios: {e}")
         return jsonify({"error": "Error al obtener horarios"}), 500
 
-@router.get("/api/ranked-songs")
-async def get_ranked_songs(sort_by: str = "total_votes", order: str = "desc"):
+@app.route('/api/ranked-songs', methods=['GET'])
+def get_ranked_songs():
     try:
+        sort_by = request.args.get('sort_by', 'total_votes')
+        order = request.args.get('order', 'desc')
+        
         # Validar parámetros de ordenamiento
         valid_sort_fields = ["total_votes", "total_dislikes", "times_played", "last_played_at", "first_played_at"]
         if sort_by not in valid_sort_fields:
@@ -1266,14 +1268,16 @@ async def get_ranked_songs(sort_by: str = "total_votes", order: str = "desc"):
             .order(sort_by, desc=(order == "desc"))\
             .execute()
         
-        return response.data
+        return jsonify(response.data)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al obtener canciones rankeadas: {str(e)}")
+        return jsonify({"error": f"Error al obtener canciones rankeadas: {str(e)}"}), 500
 
 # Endpoint para agregar o actualizar una canción en el ranking
-@router.post("/api/ranked-songs")
-async def add_or_update_ranked_song(song_data: dict):
+@app.route('/api/ranked-songs', methods=['POST'])
+def add_or_update_ranked_song():
     try:
+        song_data = request.get_json()
+        
         # Verificar si la canción ya existe en el ranking
         response = supabase.table("ranked_songs")\
             .select("*")\
@@ -1317,14 +1321,21 @@ async def add_or_update_ranked_song(song_data: dict):
             # Insertar en la base de datos
             supabase.table("ranked_songs").insert(new_song).execute()
         
-        return {"message": "Canción actualizada en el ranking correctamente"}
+        return jsonify({"message": "Canción actualizada en el ranking correctamente"})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al actualizar el ranking: {str(e)}")
+        return jsonify({"error": f"Error al actualizar el ranking: {str(e)}"}), 500
 
 # Endpoint para que el admin fuerce una canción al ranking
-@router.post("/api/ranked-songs/force-add")
-async def force_add_to_ranking(song_data: dict):
+@app.route('/api/ranked-songs/force-add', methods=['POST'])
+def force_add_to_ranking():
     try:
+        song_data = request.get_json()
+        auth_header = request.headers.get('Authorization')
+        
+        # Aquí deberías verificar el token de autenticación
+        # if not verify_auth_token(auth_header):
+        #     return jsonify({"error": "No autorizado"}), 401
+        
         # Verificar si la canción ya existe
         response = supabase.table("ranked_songs")\
             .select("*")\
@@ -1343,7 +1354,7 @@ async def force_add_to_ranking(song_data: dict):
                 .eq("track_id", song_data["track_id"])\
                 .execute()
             
-            return {"message": "Canción ya existente en el ranking, fecha actualizada"}
+            return jsonify({"message": "Canción ya existente en el ranking, fecha actualizada"})
         else:
             # Agregar nueva canción al ranking
             new_song = {
@@ -1353,7 +1364,7 @@ async def force_add_to_ranking(song_data: dict):
                 "image_url": song_data.get("image_url", ""),
                 "total_votes": 0,
                 "total_dislikes": 0,
-                "times_played": 0,  # Se marca como 0 porque no se ha reproducido realmente
+                "times_played": 0,
                 "last_played_at": current_time,
                 "first_played_at": current_time,
                 "created_at": current_time,
@@ -1362,10 +1373,9 @@ async def force_add_to_ranking(song_data: dict):
             
             supabase.table("ranked_songs").insert(new_song).execute()
             
-            return {"message": "Canción agregada al ranking correctamente"}
+            return jsonify({"message": "Canción agregada al ranking correctamente"})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al forzar canción al ranking: {str(e)}")
-        
+        return jsonify({"error": f"Error al forzar canción al ranking: {str(e)}"}), 500
 # Ruta para actualizar horarios (requiere autenticación)
 @app.route('/api/schedules', methods=['PUT'])
 def update_schedules():
