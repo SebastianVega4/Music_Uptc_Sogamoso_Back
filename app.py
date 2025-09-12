@@ -15,8 +15,9 @@ import json
 import base64
 import bcrypt
 import jwt
-from fastapi import APIRouter, HTTPException, Depends
-from typing import List
+from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Any
+
 
 app = Flask(__name__)
 
@@ -331,16 +332,29 @@ def check_playing_song():
         result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
         
         if result.data and len(result.data) > 0:
+            song_data = result.data[0]
+            
+            # Agregar la canción al histórico antes de eliminarla
+            history_payload = {
+                'track_id': track_id,
+                'votes': song_data.get('votes', 0),
+                'dislikes': song_data.get('dislikes', 0)
+            }
+            
+            # Llamar al endpoint para agregar al histórico
+            history_response = add_to_song_history_internal(history_payload)
+            
             # Eliminar la canción del ranking
             supabase.table('song_ranking').delete().eq('id', track_id).execute()
             
             # También eliminar todos los votos asociados a esta canción
             supabase.table('votes').delete().eq('trackid', track_id).execute()
             
-            print(f"✅ Canción {track_id} eliminada por estar en reproducción")
+            print(f"✅ Canción {track_id} eliminada por estar en reproducción y agregada al histórico")
             return jsonify({
                 "message": "Canción eliminada del ranking por estar en reproducción",
                 "deleted": True,
+                "added_to_history": history_response.get('action') if history_response else False,
                 "song": {
                     "id": track_id,
                     "name": currently_playing_cache.get('name'),
@@ -357,6 +371,81 @@ def check_playing_song():
         print(f"❌ Error al verificar/eliminar canción: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
+# Función interna para agregar al histórico (para uso interno)
+def add_to_song_history_internal(data):
+    """Función interna para agregar canciones al histórico"""
+    try:
+        track_id = data.get('track_id')
+        
+        if not track_id:
+            return {"error": "ID de canción requerido"}
+            
+        # Verificar si la canción ya existe en el histórico
+        result = supabase.table('song_history')\
+            .select('*')\
+            .eq('track_id', track_id)\
+            .execute()
+            
+        current_time = datetime.now(timezone.utc).isoformat()
+        
+        if result.data and len(result.data) > 0:
+            # Actualizar canción existente
+            existing_song = result.data[0]
+            update_data = {
+                'times_played': existing_song['times_played'] + 1,
+                'last_played_at': current_time,
+                'updated_at': current_time
+            }
+            
+            # Si se proporcionan votos, actualizarlos también
+            if 'votes' in data:
+                update_data['total_votes'] = existing_song['total_votes'] + data['votes']
+            if 'dislikes' in data:
+                update_data['total_dislikes'] = existing_song['total_dislikes'] + data['dislikes']
+                
+            # Actualizar en la base de datos
+            supabase.table('song_history')\
+                .update(update_data)\
+                .eq('track_id', track_id)\
+                .execute()
+                
+            return {"action": "updated"}
+        else:
+            # Crear nueva entrada en el histórico
+            # Primero obtener información completa de la canción desde song_ranking
+            song_result = supabase.table('song_ranking')\
+                .select('*')\
+                .eq('id', track_id)\
+                .execute()
+                
+            if not song_result.data or len(song_result.data) == 0:
+                return {"error": "Canción no encontrada en ranking"}
+                
+            song_data = song_result.data[0]
+            new_song = {
+                'track_id': track_id,
+                'name': song_data['name'],
+                'artists': song_data['artists'],
+                'image': song_data.get('image', ''),
+                'preview_url': song_data.get('preview_url', ''),
+                'total_votes': data.get('votes', song_data.get('votes', 0)),
+                'total_dislikes': data.get('dislikes', song_data.get('dislikes', 0)),
+                'times_played': 1,
+                'last_played_at': current_time,
+                'first_played_at': current_time,
+                'created_at': current_time,
+                'updated_at': current_time
+            }
+            
+            # Insertar en la base de datos
+            supabase.table('song_history').insert(new_song).execute()
+            
+            return {"action": "created"}
+            
+    except Exception as e:
+        print(f"❌ Error interno al agregar al histórico: {e}")
+        return {"error": str(e)}
+        
 # Nuevo endpoint para obtener la canción actual del admin
 @app.route('/api/spotify/admin/currently-playing', methods=['GET'])
 def get_admin_currently_playing():
@@ -648,6 +737,216 @@ def admin_spotify_disconnect():
         print(f"Error eliminando token de BD: {e}")
     
     return jsonify({"message": "Spotify desconectado correctamente"}), 200
+
+@app.route('/api/ranking/history', methods=['GET'])
+def get_song_history():
+    """Obtener el ranking histórico de canciones"""
+    try:
+        # Obtener parámetros de ordenamiento
+        sort_by = request.args.get('sort_by', 'times_played')
+        order = request.args.get('order', 'desc')
+        
+        # Validar parámetros de ordenamiento
+        valid_sort_columns = ['times_played', 'total_votes', 'total_dislikes', 'last_played_at', 'first_played_at']
+        if sort_by not in valid_sort_columns:
+            sort_by = 'times_played'
+        
+        if order not in ['asc', 'desc']:
+            order = 'desc'
+            
+        # Obtener canciones del histórico
+        result = supabase.table('song_history')\
+            .select('*')\
+            .order(sort_by, desc=(order == 'desc'))\
+            .execute()
+            
+        return jsonify(result.data), 200
+        
+    except Exception as e:
+        print(f"❌ Error al obtener ranking histórico: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+# Endpoint para agregar/actualizar una canción en el histórico
+@app.route('/api/ranking/add-to-history', methods=['POST'])
+def add_to_song_history():
+    """Agregar o actualizar una canción en el histórico"""
+    # Verificar autenticación
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    try:
+        data = request.get_json()
+        track_id = data.get('track_id')
+        
+        if not track_id:
+            return jsonify({"error": "ID de canción requerido"}), 400
+            
+        # Verificar si la canción ya existe en el histórico
+        result = supabase.table('song_history')\
+            .select('*')\
+            .eq('track_id', track_id)\
+            .execute()
+            
+        current_time = datetime.now(timezone.utc).isoformat()
+        
+        if result.data and len(result.data) > 0:
+            # Actualizar canción existente
+            existing_song = result.data[0]
+            update_data = {
+                'times_played': existing_song['times_played'] + 1,
+                'last_played_at': current_time,
+                'updated_at': current_time
+            }
+            
+            # Si se proporcionan votos, actualizarlos también
+            if 'votes' in data:
+                update_data['total_votes'] = existing_song['total_votes'] + data['votes']
+            if 'dislikes' in data:
+                update_data['total_dislikes'] = existing_song['total_dislikes'] + data['dislikes']
+                
+            # Actualizar en la base de datos
+            supabase.table('song_history')\
+                .update(update_data)\
+                .eq('track_id', track_id)\
+                .execute()
+                
+            return jsonify({"message": "Canción actualizada en histórico", "action": "updated"}), 200
+        else:
+            # Crear nueva entrada en el histórico
+            # Primero obtener información completa de la canción desde song_ranking
+            song_result = supabase.table('song_ranking')\
+                .select('*')\
+                .eq('id', track_id)\
+                .execute()
+                
+            if not song_result.data or len(song_result.data) == 0:
+                return jsonify({"error": "Canción no encontrada en ranking"}), 404
+                
+            song_data = song_result.data[0]
+            new_song = {
+                'track_id': track_id,
+                'name': song_data['name'],
+                'artists': song_data['artists'],
+                'image': song_data.get('image', ''),
+                'preview_url': song_data.get('preview_url', ''),
+                'total_votes': song_data.get('votes', 0),
+                'total_dislikes': song_data.get('dislikes', 0),
+                'times_played': 1,
+                'last_played_at': current_time,
+                'first_played_at': current_time,
+                'created_at': current_time,
+                'updated_at': current_time
+            }
+            
+            # Insertar en la base de datos
+            supabase.table('song_history').insert(new_song).execute()
+            
+            return jsonify({"message": "Canción agregada al histórico", "action": "created"}), 201
+            
+    except Exception as e:
+        print(f"❌ Error al agregar al histórico: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+# Endpoint para que los usuarios voten por canciones desde el ranking histórico
+@app.route('/api/ranking/vote-from-history', methods=['POST'])
+def vote_from_history():
+    """Votar por una canción desde el ranking histórico"""
+    try:
+        data = request.get_json()
+        track_id = data.get('track_id')
+        
+        if not track_id:
+            return jsonify({"error": "ID de canción requerido"}), 400
+            
+        # Obtener información de la canción del histórico
+        result = supabase.table('song_history')\
+            .select('*')\
+            .eq('track_id', track_id)\
+            .execute()
+            
+        if not result.data or len(result.data) == 0:
+            return jsonify({"error": "Canción no encontrada en histórico"}), 404
+            
+        song_data = result.data[0]
+        
+        # Preparar datos para el voto (similar al endpoint de voto normal)
+        track_info = {
+            'name': song_data['name'],
+            'artists': song_data['artists'],
+            'image': song_data.get('image', ''),
+            'preview_url': song_data.get('preview_url', '')
+        }
+        
+        # Usar la misma lógica que el endpoint de voto normal
+        user_fingerprint = get_user_fingerprint()
+        
+        # Verificar si este usuario ya votó por esta canción
+        existing_vote = supabase.table('votes')\
+            .select('*')\
+            .eq('trackid', track_id)\
+            .eq('userFingerprint', user_fingerprint)\
+            .execute()
+            
+        if len(existing_vote.data) > 0:
+            return jsonify({"error": "Ya has votado por esta canción"}), 409
+            
+        # Registrar el nuevo voto
+        vote_data = {
+            'trackid': track_id,
+            'userFingerprint': user_fingerprint,
+            'ipAddress': request.remote_addr,
+            'userAgent': request.headers.get('User-Agent', ''),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'is_dislike': False
+        }
+        
+        # Añadir el voto
+        supabase.table('votes').insert(vote_data).execute()
+        
+        # Actualizar el contador de votos en la canción del ranking actual
+        try:
+            # Verificar si la canción ya existe en el ranking actual
+            existing_song = supabase.table('song_ranking')\
+                .select('*')\
+                .eq('id', track_id)\
+                .execute()
+                
+            if len(existing_song.data) > 0:
+                # Incrementar el contador existente
+                current_song = existing_song.data[0]
+                update_data = {
+                    'votes': current_song['votes'] + 1,
+                    'lastvoted': datetime.now(timezone.utc).isoformat()
+                }
+                
+                supabase.table('song_ranking')\
+                    .update(update_data)\
+                    .eq('id', track_id)\
+                    .execute()
+            else:
+                # Crear nueva entrada en el ranking
+                song_data = {
+                    'id': track_id,
+                    'name': track_info['name'],
+                    'artists': track_info['artists'],
+                    'image': track_info['image'],
+                    'preview_url': track_info['preview_url'],
+                    'votes': 1,
+                    'dislikes': 0,
+                    'lastvoted': datetime.now(timezone.utc).isoformat(),
+                    'createdat': datetime.now(timezone.utc).isoformat()
+                }
+                supabase.table('song_ranking').insert(song_data).execute()
+                
+        except Exception as e:
+            print(f"Error actualizando ranking: {e}")
+            return jsonify({"error": "Error al actualizar ranking"}), 500
+            
+        return jsonify({"message": "Voto registrado correctamente"}), 200
+            
+    except Exception as e:
+        print(f"❌ Error al votar desde histórico: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
 
 # Ruta de login mejorada
 @app.route('/api/auth/login', methods=['POST'])
@@ -1249,133 +1548,6 @@ def get_schedules():
         print(f"Error obteniendo horarios: {e}")
         return jsonify({"error": "Error al obtener horarios"}), 500
 
-@app.route('/api/ranked-songs', methods=['GET'])
-def get_ranked_songs():
-    try:
-        sort_by = request.args.get('sort_by', 'total_votes')
-        order = request.args.get('order', 'desc')
-        
-        # Validar parámetros de ordenamiento
-        valid_sort_fields = ["total_votes", "total_dislikes", "times_played", "last_played_at", "first_played_at"]
-        if sort_by not in valid_sort_fields:
-            sort_by = "total_votes"
-        
-        order = "desc" if order.lower() == "desc" else "asc"
-        
-        # Obtener canciones rankeadas
-        response = supabase.table("ranked_songs")\
-            .select("*")\
-            .order(sort_by, desc=(order == "desc"))\
-            .execute()
-        
-        return jsonify(response.data)
-    except Exception as e:
-        return jsonify({"error": f"Error al obtener canciones rankeadas: {str(e)}"}), 500
-
-# Endpoint para agregar o actualizar una canción en el ranking
-@app.route('/api/ranked-songs', methods=['POST'])
-def add_or_update_ranked_song():
-    try:
-        song_data = request.get_json()
-        
-        # Verificar si la canción ya existe en el ranking
-        response = supabase.table("ranked_songs")\
-            .select("*")\
-            .eq("track_id", song_data["track_id"])\
-            .execute()
-        
-        current_time = datetime.now().isoformat()
-        
-        if response.data:
-            # Actualizar canción existente
-            existing_song = response.data[0]
-            update_data = {
-                "total_votes": existing_song["total_votes"] + song_data.get("votes", 0),
-                "total_dislikes": existing_song["total_dislikes"] + song_data.get("dislikes", 0),
-                "times_played": existing_song["times_played"] + 1,
-                "last_played_at": current_time,
-                "updated_at": current_time
-            }
-            
-            # Actualizar en la base de datos
-            supabase.table("ranked_songs")\
-                .update(update_data)\
-                .eq("track_id", song_data["track_id"])\
-                .execute()
-        else:
-            # Agregar nueva canción al ranking
-            new_song = {
-                "track_id": song_data["track_id"],
-                "name": song_data["name"],
-                "artists": song_data["artists"],
-                "image_url": song_data.get("image_url", ""),
-                "total_votes": song_data.get("votes", 0),
-                "total_dislikes": song_data.get("dislikes", 0),
-                "times_played": 1,
-                "last_played_at": current_time,
-                "first_played_at": current_time,
-                "created_at": current_time,
-                "updated_at": current_time
-            }
-            
-            # Insertar en la base de datos
-            supabase.table("ranked_songs").insert(new_song).execute()
-        
-        return jsonify({"message": "Canción actualizada en el ranking correctamente"})
-    except Exception as e:
-        return jsonify({"error": f"Error al actualizar el ranking: {str(e)}"}), 500
-
-# Endpoint para que el admin fuerce una canción al ranking
-@app.route('/api/ranked-songs/force-add', methods=['POST'])
-def force_add_to_ranking():
-    try:
-        song_data = request.get_json()
-        auth_header = request.headers.get('Authorization')
-        
-        # Aquí deberías verificar el token de autenticación
-        # if not verify_auth_token(auth_header):
-        #     return jsonify({"error": "No autorizado"}), 401
-        
-        # Verificar si la canción ya existe
-        response = supabase.table("ranked_songs")\
-            .select("*")\
-            .eq("track_id", song_data["track_id"])\
-            .execute()
-        
-        current_time = datetime.now().isoformat()
-        
-        if response.data:
-            # Si ya existe, solo actualizar la última vez que se reprodujo
-            supabase.table("ranked_songs")\
-                .update({
-                    "last_played_at": current_time,
-                    "updated_at": current_time
-                })\
-                .eq("track_id", song_data["track_id"])\
-                .execute()
-            
-            return jsonify({"message": "Canción ya existente en el ranking, fecha actualizada"})
-        else:
-            # Agregar nueva canción al ranking
-            new_song = {
-                "track_id": song_data["track_id"],
-                "name": song_data["name"],
-                "artists": song_data["artists"],
-                "image_url": song_data.get("image_url", ""),
-                "total_votes": 0,
-                "total_dislikes": 0,
-                "times_played": 0,
-                "last_played_at": current_time,
-                "first_played_at": current_time,
-                "created_at": current_time,
-                "updated_at": current_time
-            }
-            
-            supabase.table("ranked_songs").insert(new_song).execute()
-            
-            return jsonify({"message": "Canción agregada al ranking correctamente"})
-    except Exception as e:
-        return jsonify({"error": f"Error al forzar canción al ranking: {str(e)}"}), 500
 # Ruta para actualizar horarios (requiere autenticación)
 @app.route('/api/schedules', methods=['PUT'])
 def update_schedules():
