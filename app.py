@@ -1114,7 +1114,7 @@ def vote_from_history():
                     'artists': track_info['artists'],
                     'image': track_info['image'],
                     'preview_url': track_info['preview_url'],
-                    'votes': 0,
+                    'votes': 1,
                     'dislikes': 0,
                     'lastvoted': datetime.now(timezone.utc).isoformat(),
                     'createdat': datetime.now(timezone.utc).isoformat()
