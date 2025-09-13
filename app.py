@@ -1250,7 +1250,7 @@ def admin_play_track():
         response = requests.put(
             'https://api.spotify.com/v1/me/player/play',
             headers=headers,
-            json({'uris': [track_uri]}),
+            json={'uris': [track_uri]},
             timeout=10
         )
         
