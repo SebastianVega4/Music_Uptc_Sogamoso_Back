@@ -219,18 +219,32 @@ def start_spotify_polling():
     return thread
 
 def ensure_aware_datetime(dt):
-    """Asegurar que un datetime sea timezone-aware (UTC)"""
+    """Asegurar que un datetime sea timezone-aware (UTC) - VERSIÓN MEJORADA"""
+    if dt is None:
+        return None
+        
     if isinstance(dt, str):
         # Convertir string a datetime
-        if 'Z' in dt:
-            dt = dt.replace('Z', '+00:00')
-        return datetime.fromisoformat(dt)
-    elif dt.tzinfo is None:
-        # Si es naive, convertirlo a aware (UTC)
-        return dt.replace(tzinfo=timezone.utc)
+        try:
+            if 'Z' in dt:
+                dt = dt.replace('Z', '+00:00')
+            parsed_dt = datetime.fromisoformat(dt)
+            if parsed_dt.tzinfo is None:
+                parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+            return parsed_dt
+        except (ValueError, AttributeError):
+            print(f"❌ Error parsing datetime string: {dt}")
+            return datetime.now(timezone.utc)
+    elif isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            # Si es naive, convertirlo a aware (UTC)
+            return dt.replace(tzinfo=timezone.utc)
+        else:
+            # Ya es aware, retornar tal cual
+            return dt
     else:
-        # Ya es aware, retornar tal cual
-        return dt
+        print(f"❌ Tipo de fecha no soportado: {type(dt)}")
+        return datetime.now(timezone.utc)
     
 def refresh_admin_spotify_token():
     """Refrescar el token de Spotify del admin con mejor manejo de errores"""
@@ -408,24 +422,27 @@ def admin_add_to_history():
     
     # Verificar si hay una canción reproduciéndose
     if not currently_playing_cache or not currently_playing_cache.get('is_playing'):
+        print("❌ No hay canción reproduciéndose para agregar al histórico")
         return jsonify({"error": "No hay canción reproduciéndose actualmente"}), 400
     
     track_id = currently_playing_cache.get('id')
     if not track_id:
+        print("❌ No se pudo obtener ID de la canción")
         return jsonify({"error": "No se pudo obtener ID de la canción"}), 400
     
+    print(f"🎵 Intentando agregar al histórico: {track_id} - {currently_playing_cache.get('name')}")
+    
     try:
-        # Verificar si la canción ya existe en el ranking
-        result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
-        
+        # Obtener votos actuales si existe en ranking
         votes = 0
         dislikes = 0
         
+        result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
         if result.data and len(result.data) > 0:
-            # Si existe en ranking, usar sus votos actuales
             song_data = result.data[0]
             votes = song_data.get('votes', 0)
             dislikes = song_data.get('dislikes', 0)
+            print(f"📊 Votos encontrados en ranking: {votes} likes, {dislikes} dislikes")
         
         # Agregar al histórico
         history_payload = {
@@ -436,6 +453,11 @@ def admin_add_to_history():
         
         history_response = add_to_song_history_internal(history_payload)
         
+        if 'error' in history_response:
+            print(f"❌ Error al agregar al histórico: {history_response['error']}")
+            return jsonify({"error": history_response['error']}), 500
+            
+        print(f"✅ Canción agregada al histórico: {history_response}")
         return jsonify({
             "message": "Canción agregada al histórico",
             "action": history_response.get('action'),
@@ -448,6 +470,8 @@ def admin_add_to_history():
             
     except Exception as e:
         print(f"❌ Error al agregar al histórico: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "Error interno del servidor"}), 500
         
 @app.route('/api/ranking/force-rank-current', methods=['POST'])
@@ -490,7 +514,7 @@ def force_rank_current_song():
                 'artists': currently_playing_cache.get('artists', []),
                 'image': currently_playing_cache.get('image', ''),
                 'preview_url': currently_playing_cache.get('preview_url', ''),
-                'votes': 1,  # Un voto por defecto
+                'votes': 0,
                 'dislikes': 0,
                 'lastvoted': datetime.now(timezone.utc).isoformat(),
                 'createdat': datetime.now(timezone.utc).isoformat()
@@ -527,21 +551,26 @@ def force_rank_current_song():
         
 # Función interna para agregar al histórico (para uso interno)
 def add_to_song_history_internal(data):
-    """Función interna para agregar canciones al histórico"""
+    """Función interna para agregar canciones al histórico - VERSIÓN CORREGIDA"""
     try:
         track_id = data.get('track_id')
         
         if not track_id:
             return {"error": "ID de canción requerido"}
             
+        # Obtener información de la canción desde currently_playing_cache
+        global currently_playing_cache
+        if not currently_playing_cache or not currently_playing_cache.get('is_playing'):
+            return {"error": "No hay canción reproduciéndose"}
+        
+        current_time = datetime.now(timezone.utc).isoformat()
+        
         # Verificar si la canción ya existe en el histórico
         result = supabase.table('song_history')\
             .select('*')\
             .eq('track_id', track_id)\
             .execute()
             
-        current_time = datetime.now(timezone.utc).isoformat()
-        
         if result.data and len(result.data) > 0:
             # Actualizar canción existente
             existing_song = result.data[0]
@@ -563,27 +592,18 @@ def add_to_song_history_internal(data):
                 .eq('track_id', track_id)\
                 .execute()
                 
-            return {"action": "updated"}
+            print(f"✅ Canción actualizada en histórico: {track_id}")
+            return {"action": "updated", "song": currently_playing_cache}
         else:
             # Crear nueva entrada en el histórico
-            # Primero obtener información completa de la canción desde song_ranking
-            song_result = supabase.table('song_ranking')\
-                .select('*')\
-                .eq('id', track_id)\
-                .execute()
-                
-            if not song_result.data or len(song_result.data) == 0:
-                return {"error": "Canción no encontrada en ranking"}
-                
-            song_data = song_result.data[0]
             new_song = {
                 'track_id': track_id,
-                'name': song_data['name'],
-                'artists': song_data['artists'],
-                'image': song_data.get('image', ''),
-                'preview_url': song_data.get('preview_url', ''),
-                'total_votes': data.get('votes', song_data.get('votes', 0)),
-                'total_dislikes': data.get('dislikes', song_data.get('dislikes', 0)),
+                'name': currently_playing_cache.get('name', ''),
+                'artists': currently_playing_cache.get('artists', []),
+                'image': currently_playing_cache.get('image', ''),
+                'preview_url': currently_playing_cache.get('preview_url', ''),
+                'total_votes': data.get('votes', 0),
+                'total_dislikes': data.get('dislikes', 0),
                 'times_played': 1,
                 'last_played_at': current_time,
                 'first_played_at': current_time,
@@ -594,7 +614,8 @@ def add_to_song_history_internal(data):
             # Insertar en la base de datos
             supabase.table('song_history').insert(new_song).execute()
             
-            return {"action": "created"}
+            print(f"✅ Nueva canción agregada al histórico: {track_id}")
+            return {"action": "created", "song": currently_playing_cache}
             
     except Exception as e:
         print(f"❌ Error interno al agregar al histórico: {e}")
@@ -717,7 +738,8 @@ def add_to_queue():
         return jsonify({"error": "Admin no autenticado con Spotify"}), 401
     
     # Verificar si el token necesita refresco
-    if datetime.now(timezone.utc) > admin_spotify_token['expires_at']:
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
         if not refresh_admin_spotify_token():
             return jsonify({"error": "Token de Spotify expirado"}), 401
     
@@ -725,15 +747,22 @@ def add_to_queue():
     access_token = admin_spotify_token['access_token']
     headers = {'Authorization': f'Bearer {access_token}'}
     
-    response = requests.post(
-        f'https://api.spotify.com/v1/me/player/queue?uri={track_uri}',
-        headers=headers
-    )
-    
-    if response.status_code == 204:
-        return jsonify({"message": "Canción agregada a la cola"}), 200
-    else:
-        return jsonify({"error": f"Error al agregar a la cola: {response.status_code}"}), response.status_code
+    try:
+        response = requests.post(
+            f'https://api.spotify.com/v1/me/player/queue?uri={track_uri}',
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 204:
+            return jsonify({"message": "Canción agregada a la cola"}), 200
+        else:
+            print(f"Error de Spotify al agregar a cola: {response.status_code} - {response.text}")
+            return jsonify({"error": f"Error al agregar a la cola: {response.status_code}"}), response.status_code
+            
+    except Exception as e:
+        print(f"Error en add_to_queue: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
 
 # Endpoint para obtener la cola de reproducción actual
 @app.route('/api/spotify/admin/queue', methods=['GET'])
@@ -1085,7 +1114,7 @@ def vote_from_history():
                     'artists': track_info['artists'],
                     'image': track_info['image'],
                     'preview_url': track_info['preview_url'],
-                    'votes': 1,
+                    'votes': 0,
                     'dislikes': 0,
                     'lastvoted': datetime.now(timezone.utc).isoformat(),
                     'createdat': datetime.now(timezone.utc).isoformat()
