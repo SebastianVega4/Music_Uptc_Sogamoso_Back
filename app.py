@@ -854,7 +854,7 @@ def reorder_queue():
             requests.put(
                 'https://api.spotify.com/v1/me/player/play',
                 headers=headers,
-                json({'uris': [current_track_uri]}),
+                json=({'uris': [current_track_uri]}),
                 timeout=10
             )
         
@@ -863,7 +863,7 @@ def reorder_queue():
     except Exception as e:
         print(f"Error reorganizando cola: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
-        
+
 # Endpoint para obtener la cola de reproducción actual
 @app.route('/api/spotify/admin/queue', methods=['GET'])
 def get_queue():
