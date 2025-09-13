@@ -313,7 +313,7 @@ def admin_spotify_reconnect():
 
 @app.route('/api/spotify/admin/check-playing-song', methods=['POST'])
 def check_playing_song():
-    """Verificar si la canción en reproducción está en el ranking y procesarla"""
+    """Verificar si la canción en reproducción está en el ranking y procesarla SOLO si no ha sido agregada recientemente"""
     # Verificar autenticación
     if not verify_jwt_auth():
         return jsonify({"error": "Credenciales inválidas"}), 401
@@ -329,21 +329,38 @@ def check_playing_song():
         return jsonify({"message": "No se pudo obtener ID de la canción", "processed": False}), 200
     
     try:
-        # Verificar si la canción existe en el ranking
+        # PRIMERO: Verificar si la canción ya fue agregada al histórico en los últimos 10 minutos
+        ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+        
+        recent_history_check = supabase.table('song_history')\
+            .select('last_played_at')\
+            .eq('track_id', track_id)\
+            .gte('last_played_at', ten_minutes_ago.isoformat())\
+            .execute()
+        
+        if recent_history_check.data and len(recent_history_check.data) > 0:
+            # La canción ya fue agregada al histórico recientemente, no hacer nada
+            return jsonify({
+                "message": "Canción ya agregada al histórico recientemente",
+                "processed": False,
+                "recently_added": True,
+                "last_added": recent_history_check.data[0]['last_played_at']
+            }), 200
+        
+        # SEGUNDO: Verificar si la canción existe en el ranking
         result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
         
         if result.data and len(result.data) > 0:
             # Canción ya existe en el ranking - eliminarla y agregar al histórico
             song_data = result.data[0]
             
-            # Agregar la canción al histórico antes de eliminarla
+            # Agregar la canción al histórico
             history_payload = {
                 'track_id': track_id,
                 'votes': song_data.get('votes', 0),
                 'dislikes': song_data.get('dislikes', 0)
             }
             
-            # Llamar al endpoint para agregar al histórico
             history_response = add_to_song_history_internal(history_payload)
             
             # Eliminar la canción del ranking
@@ -364,46 +381,11 @@ def check_playing_song():
                 }
             }), 200
         else:
-            # Canción NO existe en el ranking - crearla con un voto y agregar al histórico
-            track_info = {
-                'id': track_id,
-                'name': currently_playing_cache.get('name'),
-                'artists': currently_playing_cache.get('artists', []),
-                'image': currently_playing_cache.get('image', ''),
-                'preview_url': currently_playing_cache.get('preview_url', ''),
-                'votes': 1,  # Un voto por defecto
-                'dislikes': 0,
-                'lastvoted': datetime.now(timezone.utc).isoformat(),
-                'createdat': datetime.now(timezone.utc).isoformat()
-            }
-            
-            # Insertar en el ranking
-            supabase.table('song_ranking').insert(track_info).execute()
-            
-            # Crear un voto ficticio para esta canción
-            vote_data = {
-                'trackid': track_id,
-                'userFingerprint': 'auto_spotify_playing',
-                'ipAddress': 'system',
-                'userAgent': 'SpotifyAutoAdd',
-                'timestamp': datetime.now(timezone.utc).isoformat(),
-                'is_dislike': False
-            }
-            supabase.table('votes').insert(vote_data).execute()
-            
-            # Agregar al histórico con 1 voto
-            history_payload = {
-                'track_id': track_id,
-                'votes': 1,
-                'dislikes': 0
-            }
-            history_response = add_to_song_history_internal(history_payload)
-            
-            print(f"✅ Canción {track_id} agregada al ranking con 1 voto y al histórico")
+            # Canción NO existe en el ranking - NO la agregamos automáticamente
+            # Solo informamos que no está en el ranking
             return jsonify({
-                "message": "Canción agregada al ranking con 1 voto y al histórico",
-                "added": True,
-                "added_to_history": history_response.get('action') if history_response else False,
+                "message": "Canción no encontrada en el ranking",
+                "in_ranking": False,
                 "song": {
                     "id": track_id,
                     "name": currently_playing_cache.get('name'),
@@ -415,6 +397,59 @@ def check_playing_song():
         print(f"❌ Error al verificar/eliminar canción: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
+@app.route('/api/spotify/admin/add-to-history', methods=['POST'])
+def admin_add_to_history():
+    """Forzar agregar la canción actual al histórico (para uso manual del admin)"""
+    # Verificar autenticación
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    global currently_playing_cache
+    
+    # Verificar si hay una canción reproduciéndose
+    if not currently_playing_cache or not currently_playing_cache.get('is_playing'):
+        return jsonify({"error": "No hay canción reproduciéndose actualmente"}), 400
+    
+    track_id = currently_playing_cache.get('id')
+    if not track_id:
+        return jsonify({"error": "No se pudo obtener ID de la canción"}), 400
+    
+    try:
+        # Verificar si la canción ya existe en el ranking
+        result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
+        
+        votes = 0
+        dislikes = 0
+        
+        if result.data and len(result.data) > 0:
+            # Si existe en ranking, usar sus votos actuales
+            song_data = result.data[0]
+            votes = song_data.get('votes', 0)
+            dislikes = song_data.get('dislikes', 0)
+        
+        # Agregar al histórico
+        history_payload = {
+            'track_id': track_id,
+            'votes': votes,
+            'dislikes': dislikes
+        }
+        
+        history_response = add_to_song_history_internal(history_payload)
+        
+        return jsonify({
+            "message": "Canción agregada al histórico",
+            "action": history_response.get('action'),
+            "song": {
+                "id": track_id,
+                "name": currently_playing_cache.get('name'),
+                "artists": currently_playing_cache.get('artists')
+            }
+        }), 200
+            
+    except Exception as e:
+        print(f"❌ Error al agregar al histórico: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+        
 @app.route('/api/ranking/force-rank-current', methods=['POST'])
 def force_rank_current_song():
     """Forzar el ranking de la canción actualmente en reproducción"""
