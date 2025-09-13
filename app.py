@@ -1212,6 +1212,197 @@ def handle_auth():
         print(f"Error en autenticación: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
+# Endpoints para control de reproducción de Spotify del admin
+@app.route('/api/spotify/admin/play', methods=['POST'])
+def admin_play_track():
+    """Reproducir una canción específica"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    data = request.get_json()
+    track_uri = data.get('uri')
+    
+    if not track_uri:
+        return jsonify({"error": "URI de canción requerida"}), 400
+        
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
+    
+    # Verificar si el token necesita refresco
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Reproducir la canción
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    try:
+        # Primero pausar la reproducción actual
+        requests.put(
+            'https://api.spotify.com/v1/me/player/pause',
+            headers=headers,
+            timeout=10
+        )
+        
+        # Reproducir la canción específica
+        response = requests.put(
+            'https://api.spotify.com/v1/me/player/play',
+            headers=headers,
+            json({'uris': [track_uri]}),
+            timeout=10
+        )
+        
+        if response.status_code in [200, 204]:
+            return jsonify({"message": "Canción reproducida"}), 200
+        else:
+            return jsonify({"error": f"Error al reproducir: {response.status_code}"}), response.status_code
+            
+    except Exception as e:
+        print(f"Error en play_track: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+@app.route('/api/spotify/admin/pause', methods=['PUT'])
+def admin_pause_playback():
+    """Pausar la reproducción"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
+    
+    # Verificar si el token necesita refresco
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Pausar reproducción
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    try:
+        response = requests.put(
+            'https://api.spotify.com/v1/me/player/pause',
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code in [200, 204]:
+            return jsonify({"message": "Reproducción pausada"}), 200
+        else:
+            return jsonify({"error": f"Error al pausar: {response.status_code}"}), response.status_code
+            
+    except Exception as e:
+        print(f"Error en pause_playback: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+@app.route('/api/spotify/admin/resume', methods=['PUT'])
+def admin_resume_playback():
+    """Reanudar la reproducción"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
+    
+    # Verificar si el token necesita refresco
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Reanudar reproducción
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    try:
+        response = requests.put(
+            'https://api.spotify.com/v1/me/player/play',
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code in [200, 204]:
+            return jsonify({"message": "Reproducción reanudada"}), 200
+        else:
+            return jsonify({"error": f"Error al reanudar: {response.status_code}"}), response.status_code
+            
+    except Exception as e:
+        print(f"Error en resume_playback: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+@app.route('/api/spotify/admin/next', methods=['POST'])
+def admin_next_track():
+    """Siguiente canción"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
+    
+    # Verificar si el token necesita refresco
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Siguiente canción
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    try:
+        response = requests.post(
+            'https://api.spotify.com/v1/me/player/next',
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code in [200, 204]:
+            return jsonify({"message": "Siguiente canción"}), 200
+        else:
+            return jsonify({"error": f"Error: {response.status_code}"}), response.status_code
+            
+    except Exception as e:
+        print(f"Error en next_track: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+@app.route('/api/spotify/admin/previous', methods=['POST'])
+def admin_previous_track():
+    """Canción anterior"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
+    
+    # Verificar si el token necesita refresco
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Canción anterior
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    try:
+        response = requests.post(
+            'https://api.spotify.com/v1/me/player/previous',
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code in [200, 204]:
+            return jsonify({"message": "Canción anterior"}), 200
+        else:
+            return jsonify({"error": f"Error: {response.status_code}"}), response.status_code
+            
+    except Exception as e:
+        print(f"Error en previous_track: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+        
 @app.route('/api/spotify/currently-playing', methods=['GET'])
 def get_currently_playing():
     """Obtener la canción actualmente en reproducción del admin"""
