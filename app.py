@@ -787,35 +787,47 @@ def remove_from_queue():
         return jsonify({"error": "Error interno del servidor"}), 500
 
 # Endpoint para obtener la cola de reproducción actual
-@app.route('/api/spotify/admin/queue', methods=['GET'])
-def get_queue():
-    """Obtener la cola de reproducción actual de Spotify"""
-    # Verificar autenticación básica
+@app.route('/api/spotify/admin/queue', methods=['POST'])
+def add_to_queue():
+    """Agregar una canción a la cola de reproducción"""
     if not verify_jwt_auth():
         return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    data = request.get_json()
+    track_uri = data.get('uri')
+    
+    if not track_uri:
+        return jsonify({"error": "URI de canción requerida"}), 400
         
     if not admin_spotify_token or not admin_spotify_token.get('access_token'):
         return jsonify({"error": "Admin no autenticado con Spotify"}), 401
     
     # Verificar si el token necesita refresco
-    if datetime.now(timezone.utc) > admin_spotify_token['expires_at']:
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
         if not refresh_admin_spotify_token():
             return jsonify({"error": "Token de Spotify expirado"}), 401
     
-    # Obtener la cola de reproducción
+    # Agregar a la cola
     access_token = admin_spotify_token['access_token']
     headers = {'Authorization': f'Bearer {access_token}'}
     
-    response = requests.get(
-        'https://api.spotify.com/v1/me/player/queue',
-        headers=headers
-    )
-    
-    if response.status_code == 200:
-        queue_data = response.json()
-        return jsonify(queue_data), 200
-    else:
-        return jsonify({"error": f"Error al obtener la cola: {response.status_code}"}), response.status_code
+    try:
+        response = requests.post(
+            'https://api.spotify.com/v1/me/player/queue',
+            headers=headers,
+            params={'uri': track_uri},
+            timeout=10
+        )
+        
+        if response.status_code in [200, 204]:
+            return jsonify({"message": "Canción agregada a la cola"}), 200
+        else:
+            return jsonify({"error": f"Error al agregar a la cola: {response.status_code}"}), response.status_code
+            
+    except Exception as e:
+        print(f"Error agregando a la cola: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
         
 @app.route('/api/spotify/admin/auth', methods=['GET'])
 def admin_spotify_auth():
