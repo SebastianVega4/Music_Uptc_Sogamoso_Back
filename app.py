@@ -1554,7 +1554,8 @@ def handle_vote():
     try:
         data = request.get_json()
         track_id = data.get('trackid') or data.get('trackId')
-        is_dislike = data.get('is_dislike', False)  # Nuevo parámetro para dislikes
+        is_dislike = data.get('is_dislike', False)
+        track_info = data.get('trackInfo', {})
         
         if not track_id:
             return jsonify({"error": "ID de canción requerido"}), 400
@@ -1578,9 +1579,9 @@ def handle_vote():
                     return jsonify({"error": f"Ya has dado {vote_type} a esta canción"}), 409
                 else:
                     # Cambiar el voto (de like a dislike o viceversa)
-                    return change_vote(track_id, user_fingerprint, is_dislike, data.get('trackInfo', {}))
+                    return change_vote(track_id, user_fingerprint, is_dislike, track_info)
         except Exception as e:
-            print(f"Error verificando voto existente: {e}")
+            print(f"❌ Error verificando voto existente: {e}")
             return jsonify({"error": "Error al verificar voto"}), 500
             
         # Registrar el nuevo voto
@@ -1590,7 +1591,7 @@ def handle_vote():
             'ipAddress': request.remote_addr,
             'userAgent': request.headers.get('User-Agent', ''),
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'is_dislike': is_dislike  # Nuevo campo
+            'is_dislike': is_dislike
         }
         
         # Añadir el voto
@@ -1608,60 +1609,38 @@ def handle_vote():
                 # Incrementar el contador existente
                 current_song = existing_song.data[0]
                 update_data = {
+                    'votes': current_song['votes'] + (0 if is_dislike else 1),
+                    'dislikes': current_song.get('dislikes', 0) + (1 if is_dislike else 0),
                     'lastvoted': datetime.now(timezone.utc).isoformat()
                 }
-                
-                if is_dislike:
-                    update_data['dislikes'] = current_song.get('dislikes', 0) + 1
-                else:
-                    update_data['votes'] = current_song['votes'] + 1
                 
                 supabase.table('song_ranking')\
                     .update(update_data)\
                     .eq('id', track_id)\
                     .execute()
-                    
-                # Verificar si la canción tiene 10 dislikes y eliminarla
-                if is_dislike and update_data['dislikes'] >= 10:
-                    delete_song_from_ranking(track_id)
-                    return jsonify({
-                        "message": "Dislike registrado correctamente", 
-                        "deleted": True
-                    }), 200
             else:
                 # Crear nueva entrada en el ranking
-                track_info_data = data.get('trackInfo', {})
                 song_data = {
                     'id': track_id,
-                    'name': track_info_data.get('name', ''),
-                    'artists': track_info_data.get('artists', []),
-                    'image': track_info_data.get('image', ''),
-                    'preview_url': track_info_data.get('preview_url', ''),
+                    'name': track_info.get('name', 'Unknown'),
+                    'artists': track_info.get('artists', []),
+                    'image': track_info.get('image', ''),
+                    'preview_url': track_info.get('preview_url', ''),
                     'votes': 0 if is_dislike else 1,
                     'dislikes': 1 if is_dislike else 0,
                     'lastvoted': datetime.now(timezone.utc).isoformat(),
-                    'createdat': datetime.now(timezone.utc).isoformat()
+                    'createdat': datetime.now(timezone.utc).isoformat(),
                 }
                 supabase.table('song_ranking').insert(song_data).execute()
-                
-                # Si es un dislike y alcanza el límite inmediatamente (poco probable pero posible)
-                if is_dislike and song_data['dislikes'] >= 10:
-                    delete_song_from_ranking(track_id)
-                    return jsonify({
-                        "message": "Dislike registrado correctamente", 
-                        "deleted": True
-                    }), 200
+            
         except Exception as e:
-            print(f"Error actualizando ranking: {e}")
+            print(f"❌ Error actualizando ranking: {e}")
             return jsonify({"error": "Error al actualizar ranking"}), 500
         
-        return jsonify({
-            "message": "Voto registrado correctamente", 
-            "deleted": False
-        }), 200
+        return jsonify({"message": "Voto registrado correctamente"}), 200
             
     except Exception as e:
-        print(f"Error al registrar voto: {e}")
+        print(f"❌ Error al registrar voto: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 def change_vote(track_id, user_fingerprint, new_is_dislike, track_info):
