@@ -27,7 +27,7 @@ allowed_origins = [
     "https://music-uptc-sogamoso.vercel.app",
     "https://sebastianvega4.github.io",
     "http://localhost:4200",
-    "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev",
+    "https://uptcmusic.com",
     "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
 ]
 
