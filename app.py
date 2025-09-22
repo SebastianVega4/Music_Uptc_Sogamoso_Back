@@ -1915,8 +1915,6 @@ def load_admin_spotify_token():
         print(f"❌ Error cargando token de admin: {e}")
         admin_spotify_token = None
 
-start_token_verification()
-
 @app.route('/api/spotify/admin/refresh-token', methods=['POST'])
 def admin_refresh_token():
     """Forzar el refresco del token de Spotify del admin"""
@@ -2136,6 +2134,8 @@ def admin_add_to_history_confirmed():
     except Exception as e:
         print(f"❌ Error al agregar al histórico: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
-        
+
+start_token_verification()
+
 if __name__ == '__main__':
     app.run(debug=True)

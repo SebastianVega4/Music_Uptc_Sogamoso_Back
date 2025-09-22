@@ -25,7 +25,7 @@ class VotingManager:
         """Iniciar polling para verificar cambios en la canción actual"""
         self.polling_active = True
         
-        def poll_voting(self):
+        def poll_voting():
             while self.polling_active:
                 try:
                     from app import currently_playing_cache
@@ -107,13 +107,13 @@ class VotingManager:
         except Exception as e:
             print(f"❌ Error cargando estado de votación: {e}")
 
-def clear_user_votes_for_session(self, session_id):
-    """Eliminar todos los votos de usuario para una sesión específica"""
-    try:
-        supabase.table('user_votes').delete().eq('vote_session', session_id).execute()
-        print(f"✅ Votos de usuario eliminados para sesión: {session_id}")
-    except Exception as e:
-        print(f"❌ Error eliminando votos de usuario: {e}")
+    def clear_user_votes_for_session(self, session_id):
+        """Eliminar todos los votos de usuario para una sesión específica"""
+        try:
+            supabase.table('user_votes').delete().eq('vote_session', session_id).execute()
+            print(f"✅ Votos de usuario eliminados para sesión: {session_id}")
+        except Exception as e:
+            print(f"❌ Error eliminando votos de usuario: {e}")
     
     def vote(self, vote_type, user_fingerprint):
         """Registrar un voto - PERMITIR VOTOS EN DIFERENTES CATEGORÍAS"""
