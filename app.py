@@ -18,7 +18,11 @@ import jwt
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 
+from voting_manager import voting_manager
+from history_manager import history_manager
 
+voting_manager.load_voting_state()
+voting_manager.start_voting_polling()
 app = Flask(__name__)
 
 # Configuración CORS simplificada
@@ -414,7 +418,7 @@ def check_playing_song():
 
 @app.route('/api/spotify/admin/add-to-history', methods=['POST'])
 def admin_add_to_history():
-    """Forzar agregar la canción actual al histórico (para uso manual del admin)"""
+    """Verificar si se puede agregar al histórico antes de proceder"""
     # Verificar autenticación
     if not verify_jwt_auth():
         return jsonify({"error": "Credenciales inválidas"}), 401
@@ -423,50 +427,31 @@ def admin_add_to_history():
     
     # Verificar si hay una canción reproduciéndose
     if not currently_playing_cache or not currently_playing_cache.get('is_playing'):
-        print("❌ No hay canción reproduciéndose para agregar al histórico")
         return jsonify({"error": "No hay canción reproduciéndose actualmente"}), 400
     
     track_id = currently_playing_cache.get('id')
     if not track_id:
-        print("❌ No se pudo obtener ID de la canción")
         return jsonify({"error": "No se pudo obtener ID de la canción"}), 400
     
-    print(f"🎵 Intentando agregar al histórico: {track_id} - {currently_playing_cache.get('name')}")
+    # Verificar si se puede agregar al histórico
+    can_add, message = history_manager.can_add_to_history(track_id)
     
-    try:
-        # Obtener votos actuales si existe en ranking
-        votes = 0
-        dislikes = 0
-        
-        result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
-        if result.data and len(result.data) > 0:
-            song_data = result.data[0]
-            votes = song_data.get('votes', 0)
-            dislikes = song_data.get('dislikes', 0)
-            print(f"📊 Votos encontrados en ranking: {votes} likes, {dislikes} dislikes")
-        
-        # Agregar al histórico
-        history_payload = {
-            'track_id': track_id,
-            'votes': votes,
-            'dislikes': dislikes
-        }
-        
-        history_response = add_to_song_history_internal(history_payload)
-        
-        if 'error' in history_response:
-            print(f"❌ Error al agregar al histórico: {history_response['error']}")
-            return jsonify({"error": history_response['error']}), 500
-            
-        print(f"✅ Canción agregada al histórico: {history_response}")
+    if can_add:
         return jsonify({
-            "message": "Canción agregada al histórico",
-            "action": history_response.get('action'),
+            "can_add": True,
+            "message": "Puede agregar esta canción al histórico",
+            "confirmation_required": True,
             "song": {
                 "id": track_id,
                 "name": currently_playing_cache.get('name'),
                 "artists": currently_playing_cache.get('artists')
             }
+        }), 200
+    else:
+        return jsonify({
+            "can_add": False,
+            "message": message,
+            "confirmation_required": False
         }), 200
             
     except Exception as e:
@@ -2046,5 +2031,98 @@ def update_schedules():
 # Llamar a la función de carga al iniciar
 load_admin_spotify_token()
 
+@app.route('/api/voting/status', methods=['GET'])
+def get_voting_status():
+    """Obtener el estado actual de la votación"""
+    try:
+        status = voting_manager.get_voting_status()
+        return jsonify(status), 200
+    except Exception as e:
+        print(f"❌ Error obteniendo estado de votación: {e}")
+        return jsonify({"error": "Error al obtener estado de votación"}), 500
+
+@app.route('/api/voting/vote', methods=['POST'])
+def handle_voting():
+    """Manejar votos de usuarios"""
+    try:
+        data = request.get_json()
+        vote_type = data.get('vote_type')
+        
+        if not vote_type or vote_type not in ['next', 'genre_change', 'repeat']:
+            return jsonify({"error": "Tipo de voto no válido"}), 400
+        
+        user_fingerprint = get_user_fingerprint()
+        success, message = voting_manager.vote(vote_type, user_fingerprint)
+        
+        if success:
+            return jsonify({"message": message, "status": voting_manager.get_voting_status()}), 200
+        else:
+            return jsonify({"error": message}), 400
+            
+    except Exception as e:
+        print(f"❌ Error procesando voto: {e}")
+        return jsonify({"error": "Error al procesar voto"}), 500
+
+@app.route('/api/spotify/admin/add-to-history-confirmed', methods=['POST'])
+def admin_add_to_history_confirmed():
+    """Agregar la canción actual al histórico con confirmación y verificación de tiempo"""
+    # Verificar autenticación
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    global currently_playing_cache
+    
+    # Verificar si hay una canción reproduciéndose
+    if not currently_playing_cache or not currently_playing_cache.get('is_playing'):
+        return jsonify({"error": "No hay canción reproduciéndose actualmente"}), 400
+    
+    track_id = currently_playing_cache.get('id')
+    if not track_id:
+        return jsonify({"error": "No se pudo obtener ID de la canción"}), 400
+    
+    try:
+        # Obtener votos actuales si existe en ranking
+        votes = 0
+        dislikes = 0
+        
+        result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
+        if result.data and len(result.data) > 0:
+            song_data = result.data[0]
+            votes = song_data.get('votes', 0)
+            dislikes = song_data.get('dislikes', 0)
+        
+        # Preparar datos de la canción
+        track_data = {
+            'track_id': track_id,
+            'name': currently_playing_cache.get('name', ''),
+            'artists': currently_playing_cache.get('artists', []),
+            'image': currently_playing_cache.get('image', ''),
+            'preview_url': currently_playing_cache.get('preview_url', '')
+        }
+        
+        # Usar el history manager para agregar con verificación
+        success, message = history_manager.add_to_history(track_data, votes, dislikes)
+        
+        if success:
+            # Si se agregó correctamente, eliminar del ranking
+            if result.data and len(result.data) > 0:
+                supabase.table('song_ranking').delete().eq('id', track_id).execute()
+                supabase.table('votes').delete().eq('trackid', track_id).execute()
+            
+            return jsonify({
+                "message": message,
+                "song": {
+                    "id": track_id,
+                    "name": currently_playing_cache.get('name'),
+                    "artists": currently_playing_cache.get('artists')
+                }
+            }), 200
+        else:
+            return jsonify({"error": message}), 400
+            
+    except Exception as e:
+        print(f"❌ Error al agregar al histórico: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+        
 if __name__ == '__main__':
     app.run(debug=True)
