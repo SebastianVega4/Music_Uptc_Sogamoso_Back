@@ -721,6 +721,46 @@ def spotify_auth():
     auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}"
     return jsonify({"authUrl": auth_url}), 200
 
+@app.route('/api/spotify/admin/queue', methods=['GET'])
+def get_queue():
+    """Obtener la cola de reproducción actual"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+        
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Admin no autenticado con Spotify"}), 401
+    
+    # Verificar si el token necesita refresco
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Token de Spotify expirado"}), 401
+    
+    # Obtener la cola
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    try:
+        response = requests.get(
+            'https://api.spotify.com/v1/me/player/queue',
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            queue_data = response.json()
+            return jsonify({
+                "currently_playing": queue_data.get('currently_playing'),
+                "queue": queue_data.get('queue', [])
+            }), 200
+        else:
+            print(f"❌ Error obteniendo cola: {response.status_code} - {response.text}")
+            return jsonify({"error": f"Error al obtener cola: {response.status_code}"}), response.status_code
+            
+    except Exception as e:
+        print(f"❌ Error al obtener cola: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+        
 # Endpoint para agregar canciones a la cola de reproducción
 @app.route('/api/spotify/admin/queue', methods=['DELETE'])
 def remove_from_queue():
