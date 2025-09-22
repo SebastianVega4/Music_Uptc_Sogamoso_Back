@@ -104,48 +104,50 @@ class VotingManager:
             print(f"❌ Error cargando estado de votación: {e}")
     
     def vote(self, vote_type, user_fingerprint):
-        """Registrar un voto"""
+        """Registrar un voto - PERMITIR VOTOS EN DIFERENTES CATEGORÍAS"""
         from app import get_user_fingerprint
-        
+    
         with self.voting_lock:
-            # Verificar si el usuario ya votó en esta sesión
+            # Verificar si el usuario ya votó por ESTA CATEGORÍA en esta sesión
             try:
                 recent_votes = supabase.table('user_votes').select('*').eq(
                     'user_fingerprint', user_fingerprint
-                ).eq('vote_session', self.current_song_id).execute()
-                
+                ).eq('vote_session', self.current_song_id).eq('vote_type', vote_type).execute()
+            
                 if recent_votes.data and len(recent_votes.data) > 0:
-                    return False, "Ya has votado en esta sesión"
-                    
+                    return False, f"Ya has votado por {self.get_vote_type_name(vote_type)} en esta sesión"
+                
             except Exception as e:
                 print(f"❌ Error verificando voto de usuario: {e}")
                 return False, "Error al verificar voto"
-            
-            # Registrar el voto
+        
+            # Resto del código permanece igual...
             if vote_type in self.active_votes:
                 self.active_votes[vote_type] += 1
-                
-                # Guardar en base de datos
-                try:
-                    # Registrar voto de usuario
-                    supabase.table('user_votes').insert({
-                        'user_fingerprint': user_fingerprint,
-                        'vote_type': vote_type,
-                        'vote_session': self.current_song_id,
-                        'voted_at': datetime.now(timezone.utc).isoformat()
-                    }).execute()
-                    
-                    # Guardar estado actual
-                    self.save_voting_state()
-                    
-                    return True, "Voto registrado correctamente"
-                    
-                except Exception as e:
-                    print(f"❌ Error registrando voto: {e}")
-                    self.active_votes[vote_type] -= 1  # Revertir el voto
-                    return False, "Error al registrar voto"
-            
+
+                # Registrar voto de usuario
+                supabase.table('user_votes').insert({
+                    'user_fingerprint': user_fingerprint,
+                    'vote_type': vote_type,
+                    'vote_session': self.current_song_id,
+                    'voted_at': datetime.now(timezone.utc).isoformat()
+                }).execute()
+
+                # Guardar estado actual
+                self.save_voting_state()
+
+                return True, f"Voto para {self.get_vote_type_name(vote_type)} registrado correctamente"
+
             return False, "Tipo de voto no válido"
+
+    def get_vote_type_name(self, vote_type):
+        """Obtener nombre legible del tipo de voto"""
+        names = {
+            'next': 'siguiente canción',
+            'genre_change': 'cambiar de género', 
+            'repeat': 'repetir género'
+        }
+        return names.get(vote_type, vote_type)
     
     def get_voting_status(self):
         """Obtener el estado actual de la votación"""
