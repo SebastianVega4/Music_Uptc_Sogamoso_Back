@@ -454,11 +454,6 @@ def admin_add_to_history():
             "confirmation_required": False
         }), 200
             
-    except Exception as e:
-        print(f"❌ Error al agregar al histórico: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": "Error interno del servidor"}), 500
         
 @app.route('/api/ranking/force-rank-current', methods=['POST'])
 def force_rank_current_song():
