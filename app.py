@@ -760,7 +760,7 @@ def get_queue():
     except Exception as e:
         print(f"❌ Error al obtener cola: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
-        
+
 # Endpoint para agregar canciones a la cola de reproducción
 @app.route('/api/spotify/admin/queue', methods=['DELETE'])
 def remove_from_queue():
@@ -943,7 +943,7 @@ def spotify_callback():
                 print("✅ Polling de Spotify iniciado")
             
             # Redirigir al panel de administración con mensaje de éxito
-            return redirect('https://music-uptc-sogamoso.vercel.app/admin-panel?spotify_connected=true')
+            return redirect('https://uptcmusic.com/admin-panel')
         else:
             # Para usuarios regulares
             return jsonify({
