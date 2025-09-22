@@ -32,7 +32,7 @@ allowed_origins = [
     "https://sebastianvega4.github.io",
     "http://localhost:4200",
     "http://uptcmusic.com",
-    "https://uptcmusic.com",
+    "https://www.uptcmusic.com",
     "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
 ]
 
