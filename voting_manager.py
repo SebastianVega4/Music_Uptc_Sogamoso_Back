@@ -116,24 +116,18 @@ class VotingManager:
             print(f"❌ Error eliminando votos de usuario: {e}")
     
     def vote(self, vote_type, user_fingerprint):
-        """Registrar un voto - PERMITIR VOTOS EN DIFERENTES CATEGORÍAS"""
+        """Registrar un voto - PERMITIR VOTOS EN TODAS LAS CATEGORÍAS"""
         from app import get_user_fingerprint
-    
         with self.voting_lock:
-            # Verificar si el usuario ya votó por ESTA CATEGORÍA en esta sesión
             try:
                 recent_votes = supabase.table('user_votes').select('*').eq(
                     'user_fingerprint', user_fingerprint
                 ).eq('vote_session', self.current_song_id).eq('vote_type', vote_type).execute()
-            
                 if recent_votes.data and len(recent_votes.data) > 0:
                     return False, f"Ya has votado por {self.get_vote_type_name(vote_type)} en esta sesión"
-                
             except Exception as e:
                 print(f"❌ Error verificando voto de usuario: {e}")
                 return False, "Error al verificar voto"
-        
-            # Resto del código permanece igual...
             if vote_type in self.active_votes:
                 self.active_votes[vote_type] += 1
 
