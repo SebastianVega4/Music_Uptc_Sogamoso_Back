@@ -2038,7 +2038,7 @@ def get_voting_status():
 
 @app.route('/api/voting/vote', methods=['POST'])
 def handle_voting():
-    """Manejar votos de usuarios - MEJORAR MENSAJES DE ERROR"""
+    """Manejar votos de usuarios"""
     try:
         data = request.get_json()
         vote_type = data.get('vote_type')
@@ -2047,20 +2047,34 @@ def handle_voting():
             return jsonify({"error": "Tipo de voto no válido"}), 400
         
         user_fingerprint = get_user_fingerprint()
+        
+        # Verificación más robusta de votos existentes
+        try:
+            recent_votes = supabase.table('user_votes').select('*').eq(
+                'user_fingerprint', user_fingerprint
+            ).eq('vote_session', voting_manager.current_song_id).execute()
+            
+            if recent_votes.data and len(recent_votes.data) > 0:
+                return jsonify({"error": "Ya has votado en esta sesión"}), 409
+                
+        except Exception as e:
+            print(f"❌ Error verificando voto de usuario: {e}")
+            return jsonify({"error": "Error al verificar voto"}), 500
+        
         success, message = voting_manager.vote(vote_type, user_fingerprint)
         
         if success:
             return jsonify({
                 "message": message, 
                 "status": voting_manager.get_voting_status(),
-                "voted_type": vote_type
+                "user_has_voted": True  # Nueva propiedad para facilitar la UI
             }), 200
         else:
             return jsonify({"error": message}), 400
             
     except Exception as e:
         print(f"❌ Error procesando voto: {e}")
-        return jsonify({"error": "Error interno del servidor"}), 500
+        return jsonify({"error": "Error al procesar voto"}), 500
 
 @app.route('/api/spotify/admin/add-to-history-confirmed', methods=['POST'])
 def admin_add_to_history_confirmed():
