@@ -156,19 +156,18 @@ class VotingManager:
         return names.get(vote_type, vote_type)
     
     def get_voting_status(self):
-       """Obtener el estado actual de la votación"""
+        """Obtener el estado actual de la votación"""
         with self.voting_lock:
-            # Asegurar que siempre retorne una estructura válida
-            return {
-                'current_song_id': self.current_song_id or '',
+            status = {
+                'current_song_id': self.current_song_id,
                 'voting_start_time': self.voting_start_time.isoformat() if self.voting_start_time else None,
-                'votes': {
-                    'next': self.active_votes.get('next', 0),
-                    'genre_change': self.active_votes.get('genre_change', 0),
-                    'repeat': self.active_votes.get('repeat', 0)
-                },
-                'total_votes': sum(self.active_votes.values()) if self.active_votes else 0
+                'votes': self.active_votes,
+                'total_votes': sum(self.active_votes.values())
             }
+            print(f"🔍 DEBUG - Voting status: {status}")
+            print(f"🔍 DEBUG - Active votes: {self.active_votes}")
+            print(f"🔍 DEBUG - Current song ID: {self.current_song_id}")
+            return status
 
 # Instancia global del administrador de votaciones
 voting_manager = VotingManager()
