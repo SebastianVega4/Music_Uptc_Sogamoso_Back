@@ -2185,7 +2185,7 @@ def get_thread(thread_id):
 
 @app.route('/api/discussion/threads/<thread_id>/comments', methods=['POST'])
 def add_comment(thread_id):
-    """Agregar comentario a un hilo"""
+    """Agregar comentario a un hilo - VERSIÓN CORREGIDA"""
     try:
         data = request.get_json()
         author_fingerprint = get_user_fingerprint()
@@ -2199,9 +2199,14 @@ def add_comment(thread_id):
         
         result = supabase.table('thread_comments').insert(comment_data).execute()
         
-        # Actualizar contador de comentarios en el hilo
+        # Obtener y actualizar contador de comentarios CORREGIDO
+        comments_count = supabase.table('thread_comments')\
+            .select('id', count='exact')\
+            .eq('thread_id', thread_id)\
+            .execute()
+        
         supabase.table('discussion_threads')\
-            .update({'comments_count': supabase.get_count('thread_comments', f"thread_id = '{thread_id}'")})\
+            .update({'comments_count': comments_count.count})\
             .eq('id', thread_id)\
             .execute()
             
@@ -2211,7 +2216,7 @@ def add_comment(thread_id):
 
 @app.route('/api/discussion/like', methods=['POST'])
 def like_item():
-    """Dar like a hilo o comentario"""
+    """Dar like a hilo o comentario - VERSIÓN CORREGIDA"""
     try:
         data = request.get_json()
         user_fingerprint = get_user_fingerprint()
@@ -2223,16 +2228,16 @@ def like_item():
         }
         
         # Verificar si ya existe el like
-        existing_like = supabase.table('discussion_likes')\
+        existing_query = supabase.table('discussion_likes')\
             .select('*')\
-            .match(like_data)\
+            .match({k: v for k, v in like_data.items() if v is not None})\
             .execute()
             
-        if existing_like.data:
+        if existing_query.data:
             # Quitar like
             supabase.table('discussion_likes')\
                 .delete()\
-                .match(like_data)\
+                .match({k: v for k, v in like_data.items() if v is not None})\
                 .execute()
             action = 'unliked'
         else:
@@ -2240,15 +2245,26 @@ def like_item():
             supabase.table('discussion_likes').insert(like_data).execute()
             action = 'liked'
         
-        # Actualizar contador de likes
+        # Actualizar contador de likes CORREGIDO
         if data.get('thread_id'):
-            new_count = supabase.get_count('discussion_likes', f"thread_id = '{data['thread_id']}'")
+            count_query = supabase.table('discussion_likes')\
+                .select('id', count='exact')\
+                .eq('thread_id', data['thread_id'])\
+                .execute()
+            new_count = count_query.count
+            
             supabase.table('discussion_threads')\
                 .update({'likes_count': new_count})\
                 .eq('id', data['thread_id'])\
                 .execute()
+                
         elif data.get('comment_id'):
-            new_count = supabase.get_count('discussion_likes', f"comment_id = '{data['comment_id']}'")
+            count_query = supabase.table('discussion_likes')\
+                .select('id', count='exact')\
+                .eq('comment_id', data['comment_id'])\
+                .execute()
+            new_count = count_query.count
+            
             supabase.table('thread_comments')\
                 .update({'likes_count': new_count})\
                 .eq('id', data['comment_id'])\
@@ -2257,7 +2273,7 @@ def like_item():
         return jsonify({"action": action, "new_count": new_count}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-        
+
 start_token_verification()
 
 if __name__ == '__main__':
