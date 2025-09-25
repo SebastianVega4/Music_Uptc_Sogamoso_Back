@@ -2122,6 +2122,142 @@ def admin_add_to_history_confirmed():
         print(f"❌ Error al agregar al histórico: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
+@app.route('/api/discussion/threads', methods=['GET'])
+def get_threads():
+    """Obtener lista de hilos ordenados por actividad"""
+    try:
+        sort_by = request.args.get('sort', 'updated_at')  # updated_at, likes_count, created_at
+        order = request.args.get('order', 'desc')
+        
+        result = supabase.table('discussion_threads')\
+            .select('*')\
+            .order(sort_by, desc=(order == 'desc'))\
+            .execute()
+            
+        return jsonify(result.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/discussion/threads', methods=['POST'])
+def create_thread():
+    """Crear nuevo hilo de discusión"""
+    try:
+        data = request.get_json()
+        author_fingerprint = get_user_fingerprint()
+        
+        thread_data = {
+            'title': data['title'],
+            'content': data['content'],
+            'author_fingerprint': author_fingerprint
+        }
+        
+        result = supabase.table('discussion_threads').insert(thread_data).execute()
+        return jsonify(result.data[0]), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/discussion/threads/<thread_id>', methods=['GET'])
+def get_thread(thread_id):
+    """Obtener hilo específico con sus comentarios"""
+    try:
+        # Obtener el hilo
+        thread_result = supabase.table('discussion_threads')\
+            .select('*')\
+            .eq('id', thread_id)\
+            .execute()
+            
+        if not thread_result.data:
+            return jsonify({"error": "Hilo no encontrado"}), 404
+            
+        # Obtener comentarios del hilo
+        comments_result = supabase.table('thread_comments')\
+            .select('*')\
+            .eq('thread_id', thread_id)\
+            .order('created_at', desc=False)\
+            .execute()
+            
+        return jsonify({
+            'thread': thread_result.data[0],
+            'comments': comments_result.data
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/discussion/threads/<thread_id>/comments', methods=['POST'])
+def add_comment(thread_id):
+    """Agregar comentario a un hilo"""
+    try:
+        data = request.get_json()
+        author_fingerprint = get_user_fingerprint()
+        
+        comment_data = {
+            'thread_id': thread_id,
+            'author_fingerprint': author_fingerprint,
+            'content': data['content'],
+            'parent_comment_id': data.get('parent_comment_id')
+        }
+        
+        result = supabase.table('thread_comments').insert(comment_data).execute()
+        
+        # Actualizar contador de comentarios en el hilo
+        supabase.table('discussion_threads')\
+            .update({'comments_count': supabase.get_count('thread_comments', f"thread_id = '{thread_id}'")})\
+            .eq('id', thread_id)\
+            .execute()
+            
+        return jsonify(result.data[0]), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/discussion/like', methods=['POST'])
+def like_item():
+    """Dar like a hilo o comentario"""
+    try:
+        data = request.get_json()
+        user_fingerprint = get_user_fingerprint()
+        
+        like_data = {
+            'user_fingerprint': user_fingerprint,
+            'thread_id': data.get('thread_id'),
+            'comment_id': data.get('comment_id')
+        }
+        
+        # Verificar si ya existe el like
+        existing_like = supabase.table('discussion_likes')\
+            .select('*')\
+            .match(like_data)\
+            .execute()
+            
+        if existing_like.data:
+            # Quitar like
+            supabase.table('discussion_likes')\
+                .delete()\
+                .match(like_data)\
+                .execute()
+            action = 'unliked'
+        else:
+            # Dar like
+            supabase.table('discussion_likes').insert(like_data).execute()
+            action = 'liked'
+        
+        # Actualizar contador de likes
+        if data.get('thread_id'):
+            new_count = supabase.get_count('discussion_likes', f"thread_id = '{data['thread_id']}'")
+            supabase.table('discussion_threads')\
+                .update({'likes_count': new_count})\
+                .eq('id', data['thread_id'])\
+                .execute()
+        elif data.get('comment_id'):
+            new_count = supabase.get_count('discussion_likes', f"comment_id = '{data['comment_id']}'")
+            supabase.table('thread_comments')\
+                .update({'likes_count': new_count})\
+                .eq('id', data['comment_id'])\
+                .execute()
+        
+        return jsonify({"action": action, "new_count": new_count}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+        
 start_token_verification()
 
 if __name__ == '__main__':
