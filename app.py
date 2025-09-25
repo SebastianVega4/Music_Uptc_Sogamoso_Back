@@ -2086,7 +2086,7 @@ def admin_add_to_history_confirmed():
         result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
         if result.data and len(result.data) > 0:
             song_data = result.data[0]
-            votes = song_data.get('votes', 0)
+            votes = song_data.get('votes', 1)
             dislikes = song_data.get('dislikes', 0)
         
         # Preparar datos de la canción
