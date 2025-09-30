@@ -2312,153 +2312,51 @@ MAX_MEMORY_MESSAGES = 1000
 # === RUTAS HTTP PARA CHAT 
 @app.route('/api/chat/messages', methods=['GET', 'OPTIONS'])
 def get_chat_messages():
-    """Obtener historial de mensajes - VERSIÓN CORREGIDA"""
+    """Obtener historial de mensajes - VERSIÓN MEJORADA"""
     if request.method == 'OPTIONS':
         return '', 200
         
     try:
         room = request.args.get('room', 'general')
-        limit = min(int(request.args.get('limit', 50)), 100)
-        since = request.args.get('since')  # Nuevo parámetro para obtener mensajes desde una fecha
+        limit = min(int(request.args.get('limit', 100)), 200)  # Aumentado el límite
+        since = request.args.get('since')  # Parámetro opcional para mensajes desde cierta fecha
         
-        # Si se proporciona 'since', obtener mensajes desde esa fecha
+        messages = []
+        
+        # Siempre obtener de la base de datos para consistencia
+        query = supabase.table('chat_messages')\
+            .select('*')\
+            .eq('room', room)\
+            .order('created_at', desc=False)\
+            .limit(limit)
+            
+        # Si se proporciona 'since', filtrar mensajes más recientes
         if since:
-            # Desde Redis
-            if redis_client:
-                try:
-                    # Obtener todos los mensajes del room
-                    message_ids = redis_client.zrangebyscore(
-                        f'chat_messages:{room}', 
-                        float(since), 
-                        '+inf'
-                    )
-                    
-                    messages = []
-                    if message_ids:
-                        pipe = redis_client.pipeline()
-                        for msg_id in message_ids:
-                            pipe.hgetall(f'chat_message:{msg_id}')
-                        redis_messages = pipe.execute()
-                        
-                        for msg_data in redis_messages:
-                            if msg_data:
-                                messages.append({
-                                    'id': msg_data.get('id', ''),
-                                    'user': msg_data.get('user', 'Anónimo'),
-                                    'user_id': msg_data.get('user_id', ''),
-                                    'message': msg_data.get('message', ''),
-                                    'timestamp': msg_data.get('timestamp', ''),
-                                    'room': msg_data.get('room', room),
-                                    'type': msg_data.get('type', 'message')
-                                })
-                        
-                        # Ordenar por timestamp (más antiguo primero)
-                        messages.sort(key=lambda x: x.get('timestamp', ''))
-                except Exception as redis_error:
-                    print(f'⚠️  Error obteniendo mensajes nuevos de Redis: {redis_error}')
-                    messages = []
+            query = query.gte('created_at', since)
             
-            # Si no hay mensajes en Redis, obtener de la base de datos
-            if not messages:
-                result = supabase.table('chat_messages')\
-                    .select('*')\
-                    .eq('room', room)\
-                    .gte('created_at', since)\
-                    .order('created_at', desc=False)\
-                    .execute()
-                
-                if result.data:
-                    messages = []
-                    for msg in result.data:
-                        messages.append({
-                            'id': msg['id'],
-                            'user': msg['user_name'],
-                            'user_id': msg.get('user_id', ''),
-                            'message': msg['message'],
-                            'timestamp': msg['created_at'],
-                            'room': msg['room'],
-                            'type': msg['message_type']
-                        })
-            
-            return jsonify({
-                'messages': messages,
-                'total': len(messages),
-                'room': room,
-                'has_more': False
-            }), 200
+        result = query.execute()
         
-        # Si no hay 'since', obtener los últimos mensajes (comportamiento normal)
-        else:
-            messages = []
-            
-            # Desde Redis
-            if redis_client:
-                try:
-                    message_ids = redis_client.zrevrange(
-                        f'chat_messages:{room}', 
-                        0, 
-                        limit - 1
-                    )
-                    
-                    if message_ids:
-                        pipe = redis_client.pipeline()
-                        for msg_id in message_ids:
-                            pipe.hgetall(f'chat_message:{msg_id}')
-                        redis_messages = pipe.execute()
-                        
-                        for msg_data in redis_messages:
-                            if msg_data:
-                                messages.append({
-                                    'id': msg_data.get('id', ''),
-                                    'user': msg_data.get('user', 'Anónimo'),
-                                    'user_id': msg_data.get('user_id', ''),
-                                    'message': msg_data.get('message', ''),
-                                    'timestamp': msg_data.get('timestamp', ''),
-                                    'room': msg_data.get('room', room),
-                                    'type': msg_data.get('type', 'message')
-                                })
-                        
-                        # Ordenar por timestamp (más reciente primero)
-                        messages.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-                except Exception as redis_error:
-                    print(f'⚠️  Error obteniendo mensajes de Redis: {redis_error}')
-            
-            # Si no hay mensajes en Redis, obtener de la base de datos
-            if not messages:
-                result = supabase.table('chat_messages')\
-                    .select('*')\
-                    .eq('room', room)\
-                    .order('created_at', desc=True)\
-                    .limit(limit)\
-                    .execute()
-                
-                if result.data:
-                    for msg in result.data:
-                        messages.append({
-                            'id': msg['id'],
-                            'user': msg['user_name'],
-                            'user_id': msg.get('user_id', ''),
-                            'message': msg['message'],
-                            'timestamp': msg['created_at'],
-                            'room': msg['room'],
-                            'type': msg['message_type']
-                        })
-            
-            # Si aún no hay mensajes, usar memoria
-            if not messages and chat_messages_memory:
-                room_messages = [msg for msg in chat_messages_memory if msg.get('room') == room]
-                messages = room_messages[-limit:]  # Últimos mensajes
-            
-            # Ordenar del más antiguo al más reciente para el cliente
-            messages.sort(key=lambda x: x.get('timestamp', ''), reverse=False)
-            
-            return jsonify({
-                'messages': messages,
-                'total': len(messages),
-                'room': room,
-                'has_more': len(messages) == limit
-            }), 200
-            
+        if result.data:
+            for msg in result.data:
+                messages.append({
+                    'id': msg['id'],
+                    'user': msg['user_name'],
+                    'user_id': msg.get('user_id', ''),
+                    'message': msg['message'],
+                    'timestamp': msg['created_at'],
+                    'room': msg['room'],
+                    'type': msg['message_type']
+                })
+        
+        # Ordenar del más antiguo al más reciente para el cliente
+        messages.sort(key=lambda x: x.get('timestamp', ''), reverse=False)
+        
+        return jsonify({
+            'messages': messages,
+            'total': len(messages),
+            'room': room
+        }), 200
+        
     except Exception as e:
         print(f'❌ Error obteniendo mensajes: {e}')
         return jsonify({"error": "Error obteniendo mensajes"}), 500
