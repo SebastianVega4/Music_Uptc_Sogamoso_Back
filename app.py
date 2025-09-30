@@ -2399,7 +2399,7 @@ def get_online_users():
 
 @app.route('/api/chat/send', methods=['POST'])
 def send_chat_message():
-    """Enviar mensaje de chat - VERSIÓN OPTIMIZADA"""
+    """Enviar mensaje de chat - VERSIÓN OPTIMIZADA CON VALIDACIÓN DE ADMIN"""
     try:
         data = request.get_json()
         if not data:
@@ -2415,12 +2415,33 @@ def send_chat_message():
             
         if len(message_text) > 1000:
             return jsonify({"error": "El mensaje es demasiado largo"}), 400
+        
+        # VALIDACIÓN DE NOMBRE DE USUARIO - RESTRICCIÓN DE "admin"
+        user_lower = user.lower()
+        admin_keywords = ['admin', 'administrador', 'moderador', 'mod', 'staff']
+        
+        # Verificar si el nombre contiene palabras reservadas
+        contains_reserved = any(keyword in user_lower for keyword in admin_keywords)
+        
+        # Si contiene palabras reservadas, verificar si es admin autenticado
+        if contains_reserved:
+            if not is_admin_user():
+                return jsonify({
+                    "error": "Este nombre está reservado para administradores. Por favor, elige otro nombre."
+                }), 403
+        
+        # Verificar nombres específicos que solo el admin puede usar
+        reserved_names = ['admin', 'administrador', 'moderador']
+        if user_lower in reserved_names and not is_admin_user():
+            return jsonify({
+                "error": "Este nombre está reservado exclusivamente para administradores."
+            }), 403
             
         # Crear objeto mensaje
         message_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
         
-        # GUARDAR EN BASE DE DATOS (esto activará Supabase Realtime automáticamente)
+        # GUARDAR EN BASE DE DATOS
         try:
             db_result = supabase.table('chat_messages').insert({
                 'id': message_id,
@@ -2461,6 +2482,45 @@ def send_chat_message():
         print(f'❌ Error enviando mensaje: {e}')
         return jsonify({"error": "Error enviando mensaje"}), 500
 
+@app.route('/api/chat/validate-username', methods=['POST'])
+def validate_username():
+    """Validar si un nombre de usuario está permitido"""
+    try:
+        data = request.get_json()
+        username = data.get('username', '').strip().lower()
+        
+        if not username:
+            return jsonify({"valid": False, "error": "El nombre no puede estar vacío"}), 400
+        
+        # Lista de nombres reservados
+        reserved_names = ['admin', 'administrador', 'moderador', 'mod', 'staff']
+        admin_keywords = ['admin', 'administrador', 'moderador']
+        
+        # Verificar si es un nombre reservado exacto
+        if username in reserved_names:
+            # Solo permitir si es admin autenticado
+            if is_admin_user():
+                return jsonify({"valid": True, "is_admin": True}), 200
+            else:
+                return jsonify({
+                    "valid": False, 
+                    "error": "Este nombre está reservado para administradores"
+                }), 200
+        
+        # Verificar si contiene palabras clave de admin
+        contains_admin_keyword = any(keyword in username for keyword in admin_keywords)
+        if contains_admin_keyword:
+            return jsonify({
+                "valid": False,
+                "error": "El nombre no puede contener palabras reservadas para administradores"
+            }), 200
+        
+        return jsonify({"valid": True}), 200
+        
+    except Exception as e:
+        print(f'❌ Error validando username: {e}')
+        return jsonify({"valid": False, "error": "Error validando nombre"}), 500
+        
 @app.route('/api/chat/stats', methods=['GET'])
 def get_chat_stats():
     """Obtener estadísticas del chat - VERSIÓN MEJORADA"""
@@ -2580,6 +2640,23 @@ def save_message_to_db(message_data):
     except Exception as e:
         print(f'❌ Error guardando mensaje en BD: {e}')
     
+def is_admin_user():
+    """Verificar si el usuario actual es admin basado en el JWT"""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return False
+        
+    try:
+        token = auth_header.split('Bearer ')[1]
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        # Verificar si el usuario existe en la base de datos y es admin
+        result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
+        return bool(result.data)
+    except Exception as e:
+        print(f"❌ Error verificando admin: {e}")
+        return False
+
 start_token_verification()
 
 if __name__ == '__main__':
