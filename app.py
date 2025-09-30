@@ -2311,29 +2311,26 @@ MAX_MEMORY_MESSAGES = 1000
 # === RUTAS HTTP PARA CHAT 
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
-    """Obtener mensajes - VERSIÓN OPTIMIZADA PARA POLLING RÁPIDO"""
+    """Obtener mensajes - VERSIÓN MEJORADA CON FILTRADO POR TIMESTAMP"""
     try:
         room = request.args.get('room', 'general')
         limit = min(int(request.args.get('limit', 50)), 100)
-        since_id = request.args.get('since')  # Nuevo parámetro para mensajes desde un ID
+        since_timestamp = request.args.get('since_timestamp')
         
         query = supabase.table('chat_messages')\
             .select('*')\
             .eq('room', room)\
-            .order('created_at', desc=True)\
+            .order('created_at', desc=False)\
             .limit(limit)
         
-        # Si se proporciona since_id, obtener solo mensajes más recientes
-        if since_id:
-            # Primero obtener la fecha del mensaje since_id
-            since_message = supabase.table('chat_messages')\
-                .select('created_at')\
-                .eq('id', since_id)\
-                .execute()
-            
-            if since_message.data:
-                since_time = since_message.data[0]['created_at']
-                query = query.gte('created_at', since_time)
+        # Si se proporciona since_timestamp, filtrar mensajes más recientes
+        if since_timestamp:
+            try:
+                since_dt = datetime.fromtimestamp(float(since_timestamp)/1000, timezone.utc)
+                query = query.gte('created_at', since_dt.isoformat())
+                print(f"🔍 Buscando mensajes desde: {since_dt.isoformat()}")
+            except ValueError as e:
+                print(f"❌ Error parseando timestamp: {e}")
         
         result = query.execute()
         
@@ -2350,13 +2347,13 @@ def get_chat_messages():
                     'type': msg.get('message_type', 'message')
                 })
         
-        # Ordenar por timestamp (más antiguo primero)
-        messages.sort(key=lambda x: x['timestamp'])
+        print(f"📨 Enviando {len(messages)} mensajes para room: {room}")
         
         return jsonify({
             'messages': messages,
             'total': len(messages),
-            'room': room
+            'room': room,
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }), 200
         
     except Exception as e:
