@@ -18,9 +18,7 @@ import jwt
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 import uuid
-from flask_socketio import SocketIO, emit, join_room
 import redis
-import eventlet
 
 from voting_manager import voting_manager
 from history_manager import history_manager
@@ -42,8 +40,6 @@ allowed_origins = [
 
 # Configuración CORS - debe venir antes de cualquier definición de ruta
 CORS(app, origins=allowed_origins, supports_credentials=True)
-# Configura SocketIO después de crear la app
-socketio = SocketIO(app, cors_allowed_origins=allowed_origins, async_mode='eventlet')
 
 @app.after_request
 def after_request(response):
@@ -2624,116 +2620,8 @@ def setup_chat_table():
         CREATE INDEX idx_chat_created_at ON chat_messages(created_at DESC);
         """
     }), 200
-
-# === WEBSOCKETS PARA CHAT EN TIEMPO REAL ===
-# @socketio.on('connect')
-def handle_connect():
-    """Manejar conexión de cliente"""
-    print(f'✅ Cliente conectado: {request.sid}')
-    emit('connected', {'message': 'Conectado al chat'})
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """Manejar desconexión de cliente"""
-    print(f'❌ Cliente desconectado: {request.sid}')
-
-@socketio.on('join_room')
-def handle_join_room(data):
-    """Unirse a una sala de chat"""
-    room = data.get('room', 'general')
-    join_room(room)
-    print(f'👤 Cliente {request.sid} se unió a la sala: {room}')
-    
-    # Notificar a otros en la sala
-    emit('user_joined', {
-        'user': data.get('user', 'Usuario'),
-        'room': room,
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'message': f"{data.get('user', 'Usuario')} se unió al chat"
-    }, room=room, include_self=False)
-
-@socketio.on('send_message')
-def handle_send_message(data):
-    """Manejar envío de mensajes en tiempo real"""
-    try:
-        message_text = data.get('message', '').strip()
-        user = data.get('user', 'Usuario').strip()
-        user_id = data.get('user_id', '').strip()
-        room = data.get('room', 'general').strip()
-        
-        if not message_text:
-            emit('error', {'message': 'El mensaje no puede estar vacío'})
-            return
-            
-        if len(message_text) > 1000:
-            emit('error', {'message': 'El mensaje es demasiado largo'})
-            return
-            
-        # Crear objeto mensaje
-        message_id = str(uuid.uuid4())
-        timestamp = datetime.now(timezone.utc).isoformat()
-        
-        message_data = {
-            'id': message_id,
-            'user': user,
-            'user_id': user_id,
-            'message': message_text,
-            'timestamp': timestamp,
-            'room': room,
-            'type': 'message'
-        }
-        
-        # GUARDAR EN BASE DE DATOS
-        try:
-            supabase.table('chat_messages').insert({
-                'id': message_id,
-                'user_name': user,
-                'user_id': user_id,
-                'message': message_text,
-                'room': room,
-                'message_type': 'message',
-                'created_at': timestamp
-            }).execute()
-            print(f'✅ Mensaje guardado en BD: {message_id}')
-        except Exception as db_error:
-            print(f'❌ Error guardando en BD: {db_error}')
-        
-        # ENVIAR A TODOS EN LA SALA EN TIEMPO REAL
-        emit('new_message', message_data, room=room)
-        
-        print(f'💬 Mensaje enviado en tiempo real por {user}: {message_text[:50]}...')
-        
-    except Exception as e:
-        print(f'❌ Error en send_message: {e}')
-        emit('error', {'message': 'Error enviando mensaje'})
-
-@socketio.on('typing')
-def handle_typing(data):
-    """Manejar indicador de escritura en tiempo real"""
-    user = data.get('user', 'Usuario')
-    room = data.get('room', 'general')
-    is_typing = data.get('is_typing', False)
-    
-    emit('user_typing', {
-        'user': user,
-        'is_typing': is_typing,
-        'room': room
-    }, room=room, include_self=False)
-
-@socketio.on('user_online')
-def handle_user_online(data):
-    """Manejar usuario online"""
-    user = data.get('user', 'Usuario')
-    room = data.get('room', 'general')
-    
-    # Actualizar contador de usuarios online
-    emit('online_users_update', {
-        'user': user,
-        'action': 'join',
-        'room': room
-    }, room=room)
     
 start_token_verification()
 
 if __name__ == '__main__':
-     socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+     app.run(debug=True, host='0.0.0.0', port=5000)
