@@ -2499,8 +2499,8 @@ def validate_username():
         
         # Verificar si es un nombre reservado exacto
         if username in reserved_names:
-            # Solo permitir si es admin autenticado
-            if is_admin_user():
+            # Solo permitir si es admin autenticado - VERIFICAR CON EL TOKEN ENVIADO
+            if is_admin_user():  # Esta función ahora verificará el token en los headers
                 return jsonify({"valid": True, "is_admin": True}), 200
             else:
                 return jsonify({
@@ -2511,10 +2511,14 @@ def validate_username():
         # Verificar si contiene palabras clave de admin
         contains_admin_keyword = any(keyword in username for keyword in admin_keywords)
         if contains_admin_keyword:
-            return jsonify({
-                "valid": False,
-                "error": "El nombre no puede contener palabras reservadas para administradores"
-            }), 200
+            # Para nombres que contienen palabras admin, también verificar si es admin
+            if is_admin_user():
+                return jsonify({"valid": True, "is_admin": True}), 200
+            else:
+                return jsonify({
+                    "valid": False,
+                    "error": "El nombre no puede contener palabras reservadas para administradores"
+                }), 200
         
         return jsonify({"valid": True}), 200
         
