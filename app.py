@@ -45,6 +45,10 @@ CORS(app, origins=allowed_origins, supports_credentials=True)
 def after_request(response):
     """Añadir headers CORS a todas las respuestas"""
     origin = request.headers.get('Origin')
+    response.headers.add('Cache-Control', 'no-cache, no-store, must-revalidate')
+    response.headers.add('Pragma', 'no-cache')
+    response.headers.add('Expires', '0')
+    response.headers.add('Access-Control-Max-Age', '86400')
     if origin in allowed_origins:
         response.headers.add('Access-Control-Allow-Origin', origin)
     response.headers.add('Access-Control-Allow-Credentials', 'true')
@@ -2311,25 +2315,25 @@ MAX_MEMORY_MESSAGES = 1000
 # === RUTAS HTTP PARA CHAT 
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
-    """Obtener mensajes - VERSIÓN MEJORADA CON FILTRADO POR TIMESTAMP"""
+    """Obtener mensajes - VERSIÓN CORREGIDA PARA TIEMPO REAL"""
     try:
         room = request.args.get('room', 'general')
-        limit = min(int(request.args.get('limit', 50)), 100)
+        limit = min(int(request.args.get('limit', 100)), 200)
         since_timestamp = request.args.get('since_timestamp')
         
         query = supabase.table('chat_messages')\
             .select('*')\
             .eq('room', room)\
-            .order('created_at', desc=False)\
+            .order('created_at', desc=True)\
             .limit(limit)
         
-        # Si se proporciona since_timestamp, filtrar mensajes más recientes
+        # Filtrar por timestamp si se proporciona
         if since_timestamp:
             try:
-                since_dt = datetime.fromtimestamp(float(since_timestamp)/1000, timezone.utc)
-                query = query.gte('created_at', since_dt.isoformat())
+                since_dt = datetime.fromtimestamp(int(since_timestamp)/1000, timezone.utc)
+                query = query.gt('created_at', since_dt.isoformat())
                 print(f"🔍 Buscando mensajes desde: {since_dt.isoformat()}")
-            except ValueError as e:
+            except (ValueError, TypeError) as e:
                 print(f"❌ Error parseando timestamp: {e}")
         
         result = query.execute()
@@ -2346,6 +2350,9 @@ def get_chat_messages():
                     'room': msg['room'],
                     'type': msg.get('message_type', 'message')
                 })
+        
+        # Invertir el orden para que sea del más viejo al más nuevo
+        messages.reverse()
         
         print(f"📨 Enviando {len(messages)} mensajes para room: {room}")
         
@@ -2408,7 +2415,7 @@ def get_online_users():
 
 @app.route('/api/chat/send', methods=['POST'])
 def send_chat_message():
-    """Enviar mensaje de chat - VERSIÓN OPTIMIZADA"""
+    """Enviar mensaje de chat - VERSIÓN OPTIMIZADA PARA TIEMPO REAL"""
     try:
         data = request.get_json()
         if not data:
@@ -2591,32 +2598,6 @@ def save_message_to_db(message_data):
         }).execute()
     except Exception as e:
         print(f'❌ Error guardando mensaje en BD: {e}')
-
-# === MIGRACIÓN: Crear tabla chat_messages en Supabase ===
-
-@app.route('/api/chat/setup', methods=['POST'])
-def setup_chat_table():
-    """Endpoint para crear la tabla de chat (ejecutar una vez)"""
-    if not verify_jwt_auth():
-        return jsonify({"error": "No autorizado"}), 401
-        
-    return jsonify({
-        "message": "Usa este SQL en Supabase para crear la tabla:",
-        "sql": """
-        CREATE TABLE chat_messages (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            user_name TEXT NOT NULL,
-            user_id TEXT,
-            message TEXT NOT NULL,
-            room TEXT DEFAULT 'general',
-            message_type TEXT DEFAULT 'message',
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        );
-        
-        CREATE INDEX idx_chat_room_time ON chat_messages(room, created_at DESC);
-        CREATE INDEX idx_chat_created_at ON chat_messages(created_at DESC);
-        """
-    }), 200
     
 start_token_verification()
 
