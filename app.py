@@ -1,3 +1,4 @@
+# v3.0
 from flask import Flask, request, jsonify
 from flask import redirect
 from flask_cors import CORS
@@ -2520,7 +2521,7 @@ def validate_username():
     except Exception as e:
         print(f'❌ Error validando username: {e}')
         return jsonify({"valid": False, "error": "Error validando nombre"}), 500
-        
+
 @app.route('/api/chat/stats', methods=['GET'])
 def get_chat_stats():
     """Obtener estadísticas del chat - VERSIÓN MEJORADA"""
