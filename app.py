@@ -58,7 +58,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-
+# === CONFIGURACIÓN REDIS CLOUD ===
 REDIS_URL = os.environ.get("REDIS_URL")
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD")
 
@@ -2282,152 +2282,298 @@ def like_item():
         return jsonify({"error": str(e)}), 500
 
 
+# Configurar Redis con manejo de errores
 redis_client = None
 try:
     if REDIS_URL and REDIS_PASSWORD:
-        # Para Redis Cloud (Upstash) necesitas incluir el password en la URL
-        redis_connection_string = f"redis://:{REDIS_PASSWORD}@{REDIS_URL.split('://')[1]}"
-        redis_client = redis.from_url(redis_connection_string)
+        # Para Redis Cloud (Upstash)
+        redis_connection_string = f"rediss://:{REDIS_PASSWORD}@{REDIS_URL}"  # rediss para SSL
+        redis_client = redis.from_url(
+            redis_connection_string,
+            ssl_cert_reqs=None,  # Deshabilitar verificación SSL para Upstash
+            decode_responses=True
+        )
         
         # Test connection
         redis_client.ping()
         print("✅ Redis Cloud conectado exitosamente")
     else:
-        print("⚠️  Redis no configurado, usando modo standalone")
+        print("⚠️  Redis no configurado, usando modo en memoria")
         redis_client = None
 except Exception as e:
     print(f"❌ Error conectando a Redis: {e}")
     print("⚠️  Continuando sin Redis")
     redis_client = None
 
-# === INICIALIZAR SOCKET.IO ===
-socketio = SocketIO(
-    app, 
-    cors_allowed_origins=allowed_origins, 
-    async_mode='threading',
-    logger=True,
-    engineio_logger=False
-)
+# Almacenamiento en memoria como fallback
+chat_messages_memory = []
+MAX_MEMORY_MESSAGES = 1000
 
-# === SOCKET.IO HANDLERS ===
+# === RUTAS HTTP PARA CHAT (COMPATIBLE CON VERCEL) ===
 
-@socketio.on('connect')
-def handle_connect():
-    print(f'✅ Cliente conectado al chat: {request.sid}')
-    emit('connected', {
-        'message': 'Conectado al chat musical', 
-        'id': request.sid,
-        'timestamp': datetime.now(timezone.utc).isoformat()
-    })
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    print(f'❌ Cliente desconectado del chat: {request.sid}')
-
-@socketio.on('join_chat')
-def handle_join_chat(data):
-    """Unirse al chat general"""
+@app.route('/api/chat/messages', methods=['GET', 'OPTIONS'])
+def get_chat_messages():
+    """Obtener historial de mensajes"""
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     try:
-        user = data.get('user', 'Usuario')
-        user_id = data.get('user_id', str(uuid.uuid4())[:8])
+        room = request.args.get('room', 'general')
+        limit = min(int(request.args.get('limit', 50)), 100)  # Máximo 100 mensajes
+        offset = int(request.args.get('offset', 0))
         
-        join_room('general')
+        # Primero intentar desde Redis
+        messages = []
+        if redis_client:
+            try:
+                # Usar Redis sorted set por timestamp para mejor ordenamiento
+                message_ids = redis_client.zrevrange(
+                    f'chat_messages:{room}', 
+                    offset, 
+                    offset + limit - 1
+                )
+                
+                if message_ids:
+                    # Obtener los mensajes
+                    pipe = redis_client.pipeline()
+                    for msg_id in message_ids:
+                        pipe.hgetall(f'chat_message:{msg_id}')
+                    redis_messages = pipe.execute()
+                    
+                    # Convertir y ordenar
+                    messages = []
+                    for msg_data in redis_messages:
+                        if msg_data:
+                            messages.append({
+                                'id': msg_data.get('id', ''),
+                                'user': msg_data.get('user', 'Anónimo'),
+                                'user_id': msg_data.get('user_id', ''),
+                                'message': msg_data.get('message', ''),
+                                'timestamp': msg_data.get('timestamp', ''),
+                                'room': msg_data.get('room', room),
+                                'type': msg_data.get('type', 'message')
+                            })
+                    
+                    # Ordenar por timestamp (más reciente primero)
+                    messages.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            except Exception as redis_error:
+                print(f'⚠️  Error obteniendo mensajes de Redis: {redis_error}')
         
-        # Mensaje de sistema
-        system_message = {
-            'id': str(uuid.uuid4()),
-            'user': 'Sistema',
-            'message': f'🎵 {user} se unió al chat',
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'room': 'general',
-            'type': 'system'
-        }
+        # Si no hay mensajes en Redis, obtener de la base de datos
+        if not messages:
+            result = supabase.table('chat_messages')\
+                .select('*')\
+                .eq('room', room)\
+                .order('created_at', desc=True)\
+                .range(offset, offset + limit - 1)\
+                .execute()
+            
+            if result.data:
+                messages = []
+                for msg in result.data:
+                    messages.append({
+                        'id': msg['id'],
+                        'user': msg['user_name'],
+                        'user_id': msg.get('user_id', ''),
+                        'message': msg['message'],
+                        'timestamp': msg['created_at'],
+                        'room': msg['room'],
+                        'type': msg['message_type']
+                    })
         
-        # Guardar y emitir
-        save_message_to_db(system_message)
-        emit('system_message', system_message, room='general')
+        # Si aún no hay mensajes, usar memoria
+        if not messages and chat_messages_memory:
+            room_messages = [msg for msg in chat_messages_memory if msg.get('room') == room]
+            messages = room_messages[offset:offset + limit]
+            
+        # Ordenar del más reciente al más antiguo para el cliente
+        messages.sort(key=lambda x: x.get('timestamp', ''), reverse=False)
         
-        # Enviar historial al usuario
-        send_message_history(request.sid)
-        
-        print(f'✅ {user} se unió al chat general')
+        return jsonify({
+            'messages': messages,
+            'total': len(messages),
+            'room': room,
+            'has_more': len(messages) == limit
+        }), 200
         
     except Exception as e:
-        print(f'❌ Error en join_chat: {e}')
-        emit('error', {'error': 'Error al unirse al chat'})
+        print(f'❌ Error obteniendo mensajes: {e}')
+        return jsonify({"error": "Error obteniendo mensajes"}), 500
 
-@socketio.on('send_chat_message')
-def handle_send_chat_message(data):
-    """Manejar envío de mensajes de chat"""
+@app.route('/api/chat/send', methods=['POST', 'OPTIONS'])
+def send_chat_message():
+    """Enviar mensaje de chat"""
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     try:
+        data = request.get_json()
         message_text = data.get('message', '').strip()
-        user = data.get('user', 'Anónimo')
-        user_id = data.get('user_id', 'unknown')
+        user = data.get('user', 'Usuario')
+        user_id = data.get('user_id', '')
+        room = data.get('room', 'general')
         
         if not message_text:
-            emit('error', {'error': 'El mensaje no puede estar vacío'})
-            return
+            return jsonify({"error": "El mensaje no puede estar vacío"}), 400
             
+        if len(message_text) > 1000:
+            return jsonify({"error": "El mensaje es demasiado largo"}), 400
+        
         # Crear objeto mensaje
+        message_id = str(uuid.uuid4())
+        timestamp = datetime.now(timezone.utc).isoformat()
+        
         message_data = {
-            'id': str(uuid.uuid4()),
+            'id': message_id,
             'user': user,
             'user_id': user_id,
             'message': message_text,
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'room': 'general',
+            'timestamp': timestamp,
+            'room': room,
             'type': 'message'
         }
         
-        # Publicar en Redis si está disponible (para escalabilidad)
+        # Guardar en Redis si está disponible
         if redis_client:
             try:
-                redis_client.publish('chat_messages', json.dumps(message_data))
+                # Guardar como hash
+                redis_client.hset(
+                    f'chat_message:{message_id}',
+                    mapping=message_data
+                )
                 
-                # También guardar en lista para historial rápido
-                redis_client.lpush('recent_messages', json.dumps(message_data))
-                redis_client.ltrim('recent_messages', 0, 99)  # Mantener últimos 100
+                # Agregar a sorted set por room para consultas rápidas
+                redis_client.zadd(
+                    f'chat_messages:{room}',
+                    {message_id: datetime.now(timezone.utc).timestamp()}
+                )
+                
+                # Limpiar mensajes antiguos (mantener últimos 1000 por room)
+                redis_client.zremrangebyrank(f'chat_messages:{room}', 0, -1001)
+                
             except Exception as redis_error:
-                print(f'⚠️  Error con Redis: {redis_error}')
+                print(f'⚠️  Error guardando en Redis: {redis_error}')
         
         # Guardar en base de datos para persistencia
         save_message_to_db(message_data)
         
-        # Emitir a todos en la sala
-        emit('new_chat_message', message_data, room='general')
+        # Guardar en memoria como fallback
+        chat_messages_memory.append(message_data)
+        if len(chat_messages_memory) > MAX_MEMORY_MESSAGES:
+            chat_messages_memory.pop(0)
         
-        print(f'💬 Mensaje de {user}: {message_text[:50]}...')
+        print(f'💬 Mensaje de {user} en {room}: {message_text[:50]}...')
+        
+        return jsonify({
+            'success': True,
+            'message': message_data,
+            'id': message_id
+        }), 200
         
     except Exception as e:
         print(f'❌ Error enviando mensaje: {e}')
-        emit('error', {'error': 'Error enviando mensaje'})
+        return jsonify({"error": "Error enviando mensaje"}), 500
 
-@socketio.on('typing_start')
-def handle_typing_start(data):
-    """Usuario empezó a escribir"""
-    user = data.get('user', 'Usuario')
-    emit('user_typing', {
-        'user': user,
-        'action': 'start'
-    }, room='general', include_self=False)
+@app.route('/api/chat/stats', methods=['GET'])
+def get_chat_stats():
+    """Obtener estadísticas del chat"""
+    try:
+        total_messages = 0
+        messages_today = 0
+        
+        # Intentar desde Redis primero
+        if redis_client:
+            try:
+                # Contar mensajes en Redis
+                for room in ['general']:  # Puedes agregar más rooms después
+                    total_messages += redis_client.zcard(f'chat_messages:{room}')
+            except Exception as e:
+                print(f'⚠️  Error contando mensajes en Redis: {e}')
+        
+        # Si no hay Redis, contar desde la base de datos
+        if total_messages == 0:
+            result = supabase.table('chat_messages')\
+                .select('id', count='exact')\
+                .execute()
+            total_messages = result.count if result.count else 0
+        
+        # Mensajes de hoy
+        today = datetime.now(timezone.utc).date().isoformat()
+        today_result = supabase.table('chat_messages')\
+            .select('id', count='exact')\
+            .gte('created_at', today)\
+            .execute()
+        messages_today = today_result.count if today_result.count else 0
+        
+        return jsonify({
+            'total_messages': total_messages,
+            'messages_today': messages_today,
+            'online_users': 0,  # No podemos trackear usuarios online sin WebSockets
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }), 200
+        
+    except Exception as e:
+        print(f'❌ Error obteniendo stats: {e}')
+        return jsonify({"error": "Error obteniendo estadísticas"}), 500
 
-@socketio.on('typing_stop')
-def handle_typing_stop(data):
-    """Usuario dejó de escribir"""
-    user = data.get('user', 'Usuario')
-    emit('user_typing', {
-        'user': user, 
-        'action': 'stop'
-    }, room='general', include_self=False)
+@app.route('/api/chat/typing', methods=['POST', 'OPTIONS'])
+def set_typing_status():
+    """Indicar que un usuario está escribiendo"""
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    try:
+        data = request.get_json()
+        user = data.get('user', 'Usuario')
+        room = data.get('room', 'general')
+        is_typing = data.get('is_typing', False)
+        
+        if redis_client:
+            try:
+                if is_typing:
+                    # Agregar usuario a la lista de typing
+                    redis_client.setex(
+                        f'typing:{room}:{user}',
+                        5,  # Expirar en 5 segundos
+                        'true'
+                    )
+                else:
+                    # Remover usuario
+                    redis_client.delete(f'typing:{room}:{user}')
+            except Exception as e:
+                print(f'⚠️  Error actualizando typing status: {e}')
+        
+        return jsonify({'success': True}), 200
+        
+    except Exception as e:
+        print(f'❌ Error en typing: {e}')
+        return jsonify({"error": "Error actualizando estado"}), 500
 
-@socketio.on('get_online_users')
-def handle_get_online_users():
-    """Obtener lista de usuarios online"""
-    # Esto es básico - en producción usarías Redis para trackear usuarios
-    emit('online_users', {
-        'count': len(list(socketio.server.manager.rooms.get('/') or [])),
-        'timestamp': datetime.now(timezone.utc).isoformat()
-    })
+@app.route('/api/chat/typing-users', methods=['GET'])
+def get_typing_users():
+    """Obtener usuarios que están escribiendo"""
+    try:
+        room = request.args.get('room', 'general')
+        typing_users = []
+        
+        if redis_client:
+            try:
+                # Buscar todas las keys de typing para esta room
+                keys = redis_client.keys(f'typing:{room}:*')
+                for key in keys:
+                    username = key.split(':')[-1]
+                    typing_users.append(username)
+            except Exception as e:
+                print(f'⚠️  Error obteniendo typing users: {e}')
+        
+        return jsonify({
+            'typing_users': typing_users,
+            'room': room
+        }), 200
+        
+    except Exception as e:
+        print(f'❌ Error obteniendo typing users: {e}')
+        return jsonify({"error": "Error obteniendo usuarios escribiendo"}), 500
 
 # === FUNCIONES AUXILIARES ===
 
@@ -2437,7 +2583,7 @@ def save_message_to_db(message_data):
         supabase.table('chat_messages').insert({
             'id': message_data['id'],
             'user_name': message_data['user'],
-            'user_id': message_data.get('user_id', 'unknown'),
+            'user_id': message_data.get('user_id', ''),
             'message': message_data['message'],
             'room': message_data['room'],
             'message_type': message_data['type'],
@@ -2445,104 +2591,6 @@ def save_message_to_db(message_data):
         }).execute()
     except Exception as e:
         print(f'❌ Error guardando mensaje en BD: {e}')
-
-def send_message_history(sid):
-    """Enviar historial de mensajes al cliente"""
-    try:
-        # Primero intentar desde Redis (más rápido)
-        recent_messages = []
-        if redis_client:
-            try:
-                redis_messages = redis_client.lrange('recent_messages', 0, 49)
-                recent_messages = [json.loads(msg) for msg in redis_messages]
-                recent_messages.reverse()  # Ordenar del más antiguo al más nuevo
-            except Exception as e:
-                print(f'⚠️  Error obteniendo mensajes de Redis: {e}')
-        
-        # Si no hay mensajes en Redis, obtener de la base de datos
-        if not recent_messages:
-            result = supabase.table('chat_messages')\
-                .select('*')\
-                .eq('room', 'general')\
-                .order('created_at', desc=True)\
-                .limit(50)\
-                .execute()
-            
-            if result.data:
-                recent_messages = result.data
-                # Convertir formato de BD a formato de mensaje
-                for msg in recent_messages:
-                    msg['id'] = msg['id']
-                    msg['user'] = msg['user_name']
-                    msg['timestamp'] = msg['created_at']
-                    msg['type'] = msg['message_type']
-                
-                recent_messages.reverse()
-        
-        # Enviar historial al cliente
-        if recent_messages:
-            emit('message_history', recent_messages, room=sid)
-            
-    except Exception as e:
-        print(f'❌ Error enviando historial: {e}')
-
-# === RUTAS HTTP PARA CHAT ===
-
-@app.route('/api/chat/messages', methods=['GET'])
-def get_chat_messages():
-    """Obtener historial de mensajes (para clients que no usan sockets)"""
-    try:
-        room = request.args.get('room', 'general')
-        limit = int(request.args.get('limit', 50))
-        offset = int(request.args.get('offset', 0))
-        
-        result = supabase.table('chat_messages')\
-            .select('*')\
-            .eq('room', room)\
-            .order('created_at', desc=True)\
-            .range(offset, offset + limit - 1)\
-            .execute()
-            
-        messages = result.data
-        # Ordenar del más antiguo al más nuevo
-        messages.reverse()
-        
-        return jsonify({
-            'messages': messages,
-            'total': len(messages),
-            'room': room
-        }), 200
-        
-    except Exception as e:
-        print(f'❌ Error obteniendo mensajes: {e}')
-        return jsonify({"error": "Error obteniendo mensajes"}), 500
-
-@app.route('/api/chat/stats', methods=['GET'])
-def get_chat_stats():
-    """Obtener estadísticas del chat"""
-    try:
-        # Total de mensajes
-        result = supabase.table('chat_messages')\
-            .select('id', count='exact')\
-            .execute()
-        
-        # Mensajes hoy
-        today = datetime.now(timezone.utc).date().isoformat()
-        today_result = supabase.table('chat_messages')\
-            .select('id', count='exact')\
-            .gte('created_at', today)\
-            .execute()
-        
-        return jsonify({
-            'total_messages': result.count,
-            'messages_today': today_result.count,
-            'online_users': len(list(socketio.server.manager.rooms.get('/') or [])),
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }), 200
-        
-    except Exception as e:
-        print(f'❌ Error obteniendo stats: {e}')
-        return jsonify({"error": "Error obteniendo estadísticas"}), 500
 
 # === MIGRACIÓN: Crear tabla chat_messages en Supabase ===
 
@@ -2552,23 +2600,23 @@ def setup_chat_table():
     if not verify_jwt_auth():
         return jsonify({"error": "No autorizado"}), 401
         
-    # Esta función asume que ya creaste la tabla manualmente en Supabase
-    # SQL para crear la tabla:
-    """
-    CREATE TABLE chat_messages (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_name TEXT NOT NULL,
-        user_id TEXT,
-        message TEXT NOT NULL,
-        room TEXT DEFAULT 'general',
-        message_type TEXT DEFAULT 'message',
-        created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    
-    CREATE INDEX idx_chat_room_time ON chat_messages(room, created_at DESC);
-    """
-    
-    return jsonify({"message": "Tabla chat_messages configurada"}), 200
+    return jsonify({
+        "message": "Usa este SQL en Supabase para crear la tabla:",
+        "sql": """
+        CREATE TABLE chat_messages (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_name TEXT NOT NULL,
+            user_id TEXT,
+            message TEXT NOT NULL,
+            room TEXT DEFAULT 'general',
+            message_type TEXT DEFAULT 'message',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        
+        CREATE INDEX idx_chat_room_time ON chat_messages(room, created_at DESC);
+        CREATE INDEX idx_chat_created_at ON chat_messages(created_at DESC);
+        """
+    }), 200
     
 start_token_verification()
 
