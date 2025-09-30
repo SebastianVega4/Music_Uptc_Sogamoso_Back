@@ -2315,11 +2315,13 @@ MAX_MEMORY_MESSAGES = 1000
 # === RUTAS HTTP PARA CHAT 
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
-    """Obtener mensajes - VERSIÓN CORREGIDA PARA TIEMPO REAL"""
+    """Obtener mensajes - VERSIÓN OPTIMIZADA PARA REAL-TIME"""
     try:
         room = request.args.get('room', 'general')
         limit = min(int(request.args.get('limit', 100)), 200)
-        since_timestamp = request.args.get('since_timestamp')
+        
+        # Usar parámetro since_iso para obtener solo mensajes nuevos
+        since_iso = request.args.get('since_iso')
         
         query = supabase.table('chat_messages')\
             .select('*')\
@@ -2327,20 +2329,14 @@ def get_chat_messages():
             .order('created_at', desc=True)\
             .limit(limit)
         
-        # Filtrar por timestamp si se proporciona
-        if since_timestamp:
-            try:
-                since_dt = datetime.fromtimestamp(int(since_timestamp)/1000, timezone.utc)
-                query = query.gt('created_at', since_dt.isoformat())
-                print(f"🔍 Buscando mensajes desde: {since_dt.isoformat()}")
-            except (ValueError, TypeError) as e:
-                print(f"❌ Error parseando timestamp: {e}")
+        if since_iso:
+            query = query.gte('created_at', since_iso)
         
         result = query.execute()
         
         messages = []
         if result.data:
-            for msg in result.data:
+            for msg in reversed(result.data):  # Revertir para orden cronológico
                 messages.append({
                     'id': msg['id'],
                     'user': msg['user_name'],
@@ -2350,11 +2346,6 @@ def get_chat_messages():
                     'room': msg['room'],
                     'type': msg.get('message_type', 'message')
                 })
-        
-        # Invertir el orden para que sea del más viejo al más nuevo
-        messages.reverse()
-        
-        print(f"📨 Enviando {len(messages)} mensajes para room: {room}")
         
         return jsonify({
             'messages': messages,
@@ -2369,44 +2360,37 @@ def get_chat_messages():
 
 @app.route('/api/chat/online-users', methods=['GET'])
 def get_online_users():
-    """Obtener usuarios online aproximados - VERSIÓN CORREGIDA"""
+    """Obtener usuarios online - VERSIÓN MEJORADA"""
     try:
         room = request.args.get('room', 'general')
+        current_time = datetime.now(timezone.utc)
         
-        online_count = 1  # Mínimo el usuario actual
+        # Calcular usuarios activos en los últimos 2 minutos
+        two_minutes_ago = current_time - timedelta(minutes=2)
         
+        # Usuarios que han enviado mensajes recientemente
+        recent_users_result = supabase.table('chat_messages')\
+            .select('user_name', count='exact')\
+            .eq('room', room)\
+            .gte('created_at', two_minutes_ago.isoformat())\
+            .execute()
+        
+        # Usuarios que están escribiendo (desde Redis si está disponible)
+        typing_users_count = 0
         if redis_client:
             try:
-                # Contar usuarios que han estado activos en los últimos 2 minutos
-                two_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=2)
-                
-                # Buscar en typing status
                 typing_keys = redis_client.keys(f'typing:{room}:*')
-                online_count = max(online_count, len(typing_keys))
-                
-                # Buscar en mensajes recientes (últimos 2 minutos)
-                recent_messages = redis_client.zrangebyscore(
-                    f'chat_messages:{room}',
-                    two_minutes_ago.timestamp(),
-                    float('inf')
-                )
-                
-                if recent_messages:
-                    # Obtener usuarios únicos de mensajes recientes
-                    recent_users = set()
-                    for msg_id in recent_messages[-20:]:  # Últimos 20 mensajes
-                        user = redis_client.hget(f'chat_message:{msg_id}', 'user')
-                        if user:
-                            recent_users.add(user)
-                    
-                    online_count = max(online_count, len(recent_users))
-                    
+                typing_users_count = len(typing_keys)
             except Exception as redis_error:
-                print(f'⚠️  Error calculando usuarios online: {redis_error}')
+                print(f'⚠️  Error obteniendo typing users: {redis_error}')
+        
+        # Calcular estimación de usuarios online
+        unique_recent_users = recent_users_result.count if recent_users_result.count else 0
+        online_count = max(1, unique_recent_users + typing_users_count)
         
         return jsonify({
             'online_users': online_count,
-            'timestamp': datetime.now(timezone.utc).isoformat()
+            'timestamp': current_time.isoformat()
         }), 200
         
     except Exception as e:
@@ -2415,7 +2399,7 @@ def get_online_users():
 
 @app.route('/api/chat/send', methods=['POST'])
 def send_chat_message():
-    """Enviar mensaje de chat - VERSIÓN OPTIMIZADA PARA TIEMPO REAL"""
+    """Enviar mensaje de chat - VERSIÓN OPTIMIZADA"""
     try:
         data = request.get_json()
         if not data:
@@ -2436,17 +2420,7 @@ def send_chat_message():
         message_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
         
-        message_data = {
-            'id': message_id,
-            'user': user,
-            'user_id': user_id,
-            'message': message_text,
-            'timestamp': timestamp,
-            'room': room,
-            'type': 'message'
-        }
-        
-        # GUARDAR EN BASE DE DATOS
+        # GUARDAR EN BASE DE DATOS (esto activará Supabase Realtime automáticamente)
         try:
             db_result = supabase.table('chat_messages').insert({
                 'id': message_id,
@@ -2458,18 +2432,30 @@ def send_chat_message():
                 'created_at': timestamp
             }).execute()
             
+            if not db_result.data:
+                return jsonify({"error": "Error guardando mensaje en BD"}), 500
+                
             print(f'✅ Mensaje guardado en BD: {message_id}')
+            
+            # Construir respuesta
+            message_data = {
+                'id': message_id,
+                'user': user,
+                'user_id': user_id,
+                'message': message_text,
+                'timestamp': timestamp,
+                'room': room,
+                'type': 'message'
+            }
+            
+            return jsonify({
+                'success': True,
+                'message': message_data
+            }), 200
             
         except Exception as db_error:
             print(f'❌ Error guardando en BD: {db_error}')
             return jsonify({"error": "Error guardando mensaje"}), 500
-        
-        # Respuesta inmediata con el mensaje
-        return jsonify({
-            'success': True,
-            'message': message_data,
-            'id': message_id
-        }), 200
         
     except Exception as e:
         print(f'❌ Error enviando mensaje: {e}')
@@ -2477,45 +2463,40 @@ def send_chat_message():
 
 @app.route('/api/chat/stats', methods=['GET'])
 def get_chat_stats():
-    """Obtener estadísticas del chat"""
+    """Obtener estadísticas del chat - VERSIÓN MEJORADA"""
     try:
-        total_messages = 0
-        messages_today = 0
-        
-        # Intentar desde Redis primero
-        if redis_client:
-            try:
-                # Contar mensajes en Redis
-                for room in ['general']:  # Puedes agregar más rooms después
-                    total_messages += redis_client.zcard(f'chat_messages:{room}')
-            except Exception as e:
-                print(f'⚠️  Error contando mensajes en Redis: {e}')
-        
-        # Si no hay Redis, contar desde la base de datos
-        if total_messages == 0:
-            result = supabase.table('chat_messages')\
-                .select('id', count='exact')\
-                .execute()
-            total_messages = result.count if result.count else 0
+        # Total de mensajes
+        total_result = supabase.table('chat_messages')\
+            .select('id', count='exact')\
+            .execute()
+        total_messages = total_result.count if total_result.count else 0
         
         # Mensajes de hoy
-        today = datetime.now(timezone.utc).date().isoformat()
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         today_result = supabase.table('chat_messages')\
             .select('id', count='exact')\
-            .gte('created_at', today)\
+            .gte('created_at', today_start.isoformat())\
             .execute()
         messages_today = today_result.count if today_result.count else 0
+        
+        # Usuarios online aproximados
+        online_users = 1  # Valor por defecto
         
         return jsonify({
             'total_messages': total_messages,
             'messages_today': messages_today,
-            'online_users': 0,  # No podemos trackear usuarios online sin WebSockets
+            'online_users': online_users,
             'timestamp': datetime.now(timezone.utc).isoformat()
         }), 200
         
     except Exception as e:
         print(f'❌ Error obteniendo stats: {e}')
-        return jsonify({"error": "Error obteniendo estadísticas"}), 500
+        return jsonify({
+            'total_messages': 0,
+            'messages_today': 0,
+            'online_users': 1,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }), 200
 
 @app.route('/api/chat/typing', methods=['POST', 'OPTIONS'])
 def set_typing_status():
