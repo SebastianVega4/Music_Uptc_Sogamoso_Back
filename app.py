@@ -2313,24 +2313,33 @@ chat_messages_memory = []
 MAX_MEMORY_MESSAGES = 1000
 
 # === RUTAS HTTP PARA CHAT 
-@app.route('/api/chat/messages', methods=['GET', 'OPTIONS'])
+@app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
-    """Obtener historial de mensajes - VERSIÓN CORREGIDA"""
-    if request.method == 'OPTIONS':
-        return '', 200
-        
+    """Obtener mensajes - VERSIÓN OPTIMIZADA PARA POLLING RÁPIDO"""
     try:
         room = request.args.get('room', 'general')
         limit = min(int(request.args.get('limit', 50)), 100)
-        offset = int(request.args.get('offset', 0))
+        since_id = request.args.get('since')  # Nuevo parámetro para mensajes desde un ID
         
-        # Obtener desde la base de datos directamente
-        result = supabase.table('chat_messages')\
+        query = supabase.table('chat_messages')\
             .select('*')\
             .eq('room', room)\
             .order('created_at', desc=True)\
-            .range(offset, offset + limit - 1)\
-            .execute()
+            .limit(limit)
+        
+        # Si se proporciona since_id, obtener solo mensajes más recientes
+        if since_id:
+            # Primero obtener la fecha del mensaje since_id
+            since_message = supabase.table('chat_messages')\
+                .select('created_at')\
+                .eq('id', since_id)\
+                .execute()
+            
+            if since_message.data:
+                since_time = since_message.data[0]['created_at']
+                query = query.gte('created_at', since_time)
+        
+        result = query.execute()
         
         messages = []
         if result.data:
@@ -2345,47 +2354,13 @@ def get_chat_messages():
                     'type': msg.get('message_type', 'message')
                 })
         
-        # También buscar en Redis si está disponible para mensajes más recientes
-        if redis_client:
-            try:
-                # Obtener mensajes recientes de Redis (últimos 5 minutos)
-                five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
-                recent_message_ids = redis_client.zrangebyscore(
-                    f'chat_messages:{room}',
-                    five_minutes_ago.timestamp(),
-                    float('inf')
-                )
-                
-                if recent_message_ids:
-                    pipe = redis_client.pipeline()
-                    for msg_id in recent_message_ids:
-                        pipe.hgetall(f'chat_message:{msg_id}')
-                    redis_messages = pipe.execute()
-                    
-                    for msg_data in redis_messages:
-                        if msg_data and msg_data.get('id'):
-                            # Verificar que no esté ya en los mensajes de la BD
-                            if not any(m['id'] == msg_data['id'] for m in messages):
-                                messages.append({
-                                    'id': msg_data.get('id', ''),
-                                    'user': msg_data.get('user', 'Anónimo'),
-                                    'user_id': msg_data.get('user_id', ''),
-                                    'message': msg_data.get('message', ''),
-                                    'timestamp': msg_data.get('timestamp', ''),
-                                    'room': msg_data.get('room', room),
-                                    'type': msg_data.get('type', 'message')
-                                })
-            except Exception as redis_error:
-                print(f'⚠️  Error obteniendo mensajes de Redis: {redis_error}')
-        
-        # Ordenar por timestamp (más antiguo primero para el cliente)
-        messages.sort(key=lambda x: x.get('timestamp', ''))
+        # Ordenar por timestamp (más antiguo primero)
+        messages.sort(key=lambda x: x['timestamp'])
         
         return jsonify({
             'messages': messages,
             'total': len(messages),
-            'room': room,
-            'has_more': len(messages) == limit
+            'room': room
         }), 200
         
     except Exception as e:
@@ -2438,12 +2413,9 @@ def get_online_users():
         print(f'❌ Error obteniendo usuarios online: {e}')
         return jsonify({"online_users": 1}), 200
 
-@app.route('/api/chat/send', methods=['POST', 'OPTIONS'])
+@app.route('/api/chat/send', methods=['POST'])
 def send_chat_message():
-    """Enviar mensaje de chat - VERSIÓN CORREGIDA"""
-    if request.method == 'OPTIONS':
-        return '', 200
-        
+    """Enviar mensaje de chat - VERSIÓN OPTIMIZADA"""
     try:
         data = request.get_json()
         if not data:
@@ -2460,9 +2432,6 @@ def send_chat_message():
         if len(message_text) > 1000:
             return jsonify({"error": "El mensaje es demasiado largo"}), 400
             
-        if len(user) > 50:
-            user = user[:50]
-            
         # Crear objeto mensaje
         message_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -2477,7 +2446,7 @@ def send_chat_message():
             'type': 'message'
         }
         
-        # GUARDAR EN BASE DE DATOS PRIMERO (para persistencia)
+        # GUARDAR EN BASE DE DATOS
         try:
             db_result = supabase.table('chat_messages').insert({
                 'id': message_id,
@@ -2493,41 +2462,9 @@ def send_chat_message():
             
         except Exception as db_error:
             print(f'❌ Error guardando en BD: {db_error}')
-            # Continuar aunque falle la BD, usar Redis/memoria
+            return jsonify({"error": "Error guardando mensaje"}), 500
         
-        # Guardar en Redis si está disponible
-        if redis_client:
-            try:
-                # Guardar como hash
-                redis_client.hset(
-                    f'chat_message:{message_id}',
-                    mapping=message_data
-                )
-                
-                # Agregar a sorted set por room para consultas rápidas
-                redis_client.zadd(
-                    f'chat_messages:{room}',
-                    {message_id: datetime.now(timezone.utc).timestamp()}
-                )
-                
-                # Limpiar mensajes antiguos (mantener últimos 1000 por room)
-                redis_client.zremrangebyrank(f'chat_messages:{room}', 0, -1001)
-                
-                # Establecer expiración para mensajes en Redis (1 día)
-                redis_client.expire(f'chat_message:{message_id}', 86400)
-                redis_client.expire(f'chat_messages:{room}', 86400)
-                
-            except Exception as redis_error:
-                print(f'⚠️  Error guardando en Redis: {redis_error}')
-        
-        # Guardar en memoria como fallback
-        global chat_messages_memory
-        chat_messages_memory.append(message_data)
-        if len(chat_messages_memory) > MAX_MEMORY_MESSAGES:
-            chat_messages_memory = chat_messages_memory[-MAX_MEMORY_MESSAGES:]
-        
-        print(f'💬 Mensaje enviado por {user} en {room}: {message_text[:50]}...')
-        
+        # Respuesta inmediata con el mensaje
         return jsonify({
             'success': True,
             'message': message_data,
@@ -2615,29 +2552,35 @@ def set_typing_status():
 
 @app.route('/api/chat/typing-users', methods=['GET'])
 def get_typing_users():
-    """Obtener usuarios que están escribiendo"""
+    """Obtener usuarios que están escribiendo - VERSIÓN OPTIMIZADA"""
     try:
         room = request.args.get('room', 'general')
         typing_users = []
         
         if redis_client:
             try:
-                # Buscar todas las keys de typing para esta room
+                # Buscar todas las keys de typing para esta room (últimos 3 segundos)
                 keys = redis_client.keys(f'typing:{room}:*')
+                current_time = datetime.now(timezone.utc)
+                
                 for key in keys:
-                    username = key.split(':')[-1]
-                    typing_users.append(username)
+                    # Verificar que no haya expirado
+                    ttl = redis_client.ttl(key)
+                    if ttl > 0:  # Si todavía es válido
+                        username = key.split(':')[-1]
+                        typing_users.append(username)
             except Exception as e:
                 print(f'⚠️  Error obteniendo typing users: {e}')
         
         return jsonify({
             'typing_users': typing_users,
-            'room': room
+            'room': room,
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }), 200
         
     except Exception as e:
         print(f'❌ Error obteniendo typing users: {e}')
-        return jsonify({"error": "Error obteniendo usuarios escribiendo"}), 500
+        return jsonify({"typing_users": []}), 200
 
 # === FUNCIONES AUXILIARES ===
 
