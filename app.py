@@ -808,16 +808,26 @@ def get_next_in_queue():
             
             if queue_list and len(queue_list) > 0:
                 next_song = queue_list[0]
+                
+                # Extracción robusta de imagen
+                image_url = None
+                try:
+                    if next_song.get('album') and next_song['album'].get('images') and len(next_song['album']['images']) > 0:
+                        image_url = next_song['album']['images'][0]['url']
+                except Exception as img_err:
+                    print(f"Error extrayendo imagen de next song: {img_err}")
+                
                 return jsonify({
                     "next_song": {
                         "name": next_song.get('name'),
                         "artists": [artist['name'] for artist in next_song.get('artists', [])],
-                        "image": next_song.get('album', {}).get('images', [{}])[0].get('url'),
+                        "image": image_url,
                         "uri": next_song.get('uri')
                     }
                 }), 200
             else:
-                return jsonify({"message": "La cola está vacía"}), 200
+                # Cola vacía
+                return jsonify({"message": "La cola está vacía", "next_song": None}), 200
         else:
             print(f"Error obteniendo cola para next: {response.status_code}")
             return jsonify({"error": "Error al obtener información"}), 500
