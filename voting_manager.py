@@ -155,8 +155,11 @@ class VotingManager:
         }
         return names.get(vote_type, vote_type)
     
-    def get_voting_status(self):
+    def get_voting_status(self, sync_db=False):
         """Obtener el estado actual de la votación"""
+        if sync_db:
+            self.load_voting_state()
+            
         with self.voting_lock:
             status = {
                 'current_song_id': self.current_song_id,

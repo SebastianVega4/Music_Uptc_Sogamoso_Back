@@ -2123,7 +2123,7 @@ load_admin_spotify_token()
 def get_voting_status():
     """Obtener el estado actual de la votación"""
     try:
-        status = voting_manager.get_voting_status()
+        status = voting_manager.get_voting_status(sync_db=True)
         return jsonify(status), 200
     except Exception as e:
         print(f"Error obteniendo estado de votación: {e}")
