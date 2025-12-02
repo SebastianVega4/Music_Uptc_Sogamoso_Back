@@ -2486,7 +2486,7 @@ def send_chat_message():
 
 @app.route('/api/chat/validate-username', methods=['POST'])
 def validate_username():
-    """Validar si un nombre de usuario está permitido"""
+    """Validar si un nombre de usuario está permitido - VERSIÓN MEJORADA"""
     try:
         data = request.get_json()
         username = data.get('username', '').strip().lower()
@@ -2498,10 +2498,13 @@ def validate_username():
         reserved_names = ['admin', 'administrador', 'moderador', 'mod', 'staff']
         admin_keywords = ['admin', 'administrador', 'moderador']
         
+        # Verificar si es admin autenticado PRIMERO
+        is_admin = is_admin_user()
+        print(f"🔍 Validando username '{username}'. Es admin: {is_admin}")
+        
         # Verificar si es un nombre reservado exacto
         if username in reserved_names:
-            # Solo permitir si es admin autenticado - VERIFICAR CON EL TOKEN ENVIADO
-            if is_admin_user():  # Esta función ahora verificará el token en los headers
+            if is_admin:
                 return jsonify({"valid": True, "is_admin": True}), 200
             else:
                 return jsonify({
@@ -2512,8 +2515,7 @@ def validate_username():
         # Verificar si contiene palabras clave de admin
         contains_admin_keyword = any(keyword in username for keyword in admin_keywords)
         if contains_admin_keyword:
-            # Para nombres que contienen palabras admin, también verificar si es admin
-            if is_admin_user():
+            if is_admin:
                 return jsonify({"valid": True, "is_admin": True}), 200
             else:
                 return jsonify({
@@ -2647,9 +2649,10 @@ def save_message_to_db(message_data):
         print(f'❌ Error guardando mensaje en BD: {e}')
     
 def is_admin_user():
-    """Verificar si el usuario actual es admin basado en el JWT"""
+    """Verificar si el usuario actual es admin basado en el JWT - VERSIÓN MEJORADA"""
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
+        print("❌ No hay token de autorización en is_admin_user")
         return False
         
     try:
@@ -2658,9 +2661,12 @@ def is_admin_user():
         
         # Verificar si el usuario existe en la base de datos y es admin
         result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
-        return bool(result.data)
+        is_admin = bool(result.data)
+        print(f"🔍 Verificación admin: {is_admin} para user_id: {payload['user_id']}")
+        return is_admin
+        
     except Exception as e:
-        print(f"❌ Error verificando admin: {e}")
+        print(f"❌ Error verificando admin en is_admin_user: {e}")
         return False
 
 start_token_verification()
