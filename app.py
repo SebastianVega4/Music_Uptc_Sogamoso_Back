@@ -1,4 +1,3 @@
-# v3.0
 from flask import Flask, request, jsonify
 from flask import redirect
 from flask_cors import CORS
@@ -36,6 +35,8 @@ allowed_origins = [
     "http://localhost:4200",
     "http://uptcmusic.com",
     "https://www.uptcmusic.com",
+    "http://www.uptcmusic.com",
+    "https://uptcmusic.com",
     "https://9000-firebase-musicuptcsogamoso-1757187604448.cluster-dwvm25yncracsxpd26rcd5ja3m.cloudworkstations.dev"
 ]
 
