@@ -1,3 +1,9 @@
+from dotenv import load_dotenv
+try:
+    load_dotenv(encoding='utf-8')
+except UnicodeDecodeError:
+    load_dotenv(encoding='utf-16')
+
 from flask import Flask, request, jsonify
 from flask import redirect
 from flask_cors import CORS
@@ -85,9 +91,9 @@ try:
         client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
         client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET")
     ))
-    print("✅ Spotify configurado correctamente")
+    # print("✅ Spotify configurado correctamente")
 except Exception as e:
-    print(f"❌ Error configurando Spotify: {e}")
+    print(f"Error configurando Spotify: {e}")
     sp = None
 
 # Middleware simplificado para OPTIONS
@@ -108,7 +114,7 @@ def verify_jwt_auth():
     """Verificar autenticación JWT"""
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        print("❌ No hay token de autorización")
+        print("No hay token de autorización")
         return False
         
     try:
@@ -118,12 +124,12 @@ def verify_jwt_auth():
         # Verificar si el usuario existe en la base de datos y es admin
         result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
         if not result.data:
-            print(f"❌ Usuario no encontrado: {payload['user_id']}")
+            print(f"Usuario no encontrado: {payload['user_id']}")
             return False
             
         return True
     except Exception as e:
-        print(f"❌ Error decodificando token: {e}")
+        print(f"Error decodificando token: {e}")
         return False
 
 def start_spotify_polling():
@@ -139,19 +145,19 @@ def start_spotify_polling():
         while polling_active:
             try:
                 if not admin_spotify_token or not admin_spotify_token.get('access_token'):
-                    print("⚠️  No hay token de Spotify para polling")
+                    print("No hay token de Spotify para polling")
                     time.sleep(30)
                     continue
                 
                 # Verificar si el token necesita refresco automático
                 expires_at_aware = ensure_aware_datetime(admin_spotify_token['expires_at'])
                 if datetime.now(timezone.utc) > expires_at_aware:
-                    print("🔄 Token expirado en polling, refrescando...")
+                    print("Token expirado en polling, refrescando...")
                     if not refresh_admin_spotify_token():
-                        print("❌ No se pudo refrescar el token en polling")
+                        print("No se pudo refrescar el token en polling")
                         error_count += 1
                         if error_count >= max_errors:
-                            print("❌ Demasiados errores, deteniendo polling")
+                            print("Demasiados errores, deteniendo polling")
                             polling_active = False
                             break
                         time.sleep(30)
@@ -183,10 +189,10 @@ def start_spotify_polling():
                             'progress_ms': data['progress_ms'],
                             'id': track['id']
                         }
-                        print(f"🎵 Reproduciendo: {currently_playing_cache['name']}")
+                        print(f"Reproduciendo: {currently_playing_cache['name']}")
                     else:
                         currently_playing_cache = {'is_playing': False}
-                        print("⏸️  Spotify en pausa")
+                        print("Spotify en pausa")
                     
                     # Cachear por 10 segundos
                     cache_expiration = datetime.now(timezone.utc) + timedelta(seconds=10)
@@ -195,34 +201,34 @@ def start_spotify_polling():
                 elif response.status_code == 204:
                     currently_playing_cache = {'is_playing': False}
                     cache_expiration = datetime.now(timezone.utc) + timedelta(seconds=10)
-                    print("⏸️  No se está reproduciendo nada")
+                    print("No se está reproduciendo nada")
                     error_count = 0  # Reset error count
                     
                 elif response.status_code == 401:
                     # Token inválido, intentar refrescar
-                    print("🔄 Token inválido en polling, refrescando...")
+                    print("Token inválido en polling, refrescando...")
                     if refresh_admin_spotify_token():
                         error_count = 0
                     else:
                         error_count += 1
                         if error_count >= max_errors:
-                            print("❌ Demasiados errores de autenticación, deteniendo polling")
+                            print("Demasiados errores de autenticación, deteniendo polling")
                             polling_active = False
                             break
                             
                 else:
-                    print(f"❌ Error en API de Spotify: {response.status_code}")
+                    print(f"Error en API de Spotify: {response.status_code}")
                     error_count += 1
                     if error_count >= max_errors:
-                        print("❌ Demasiados errores, deteniendo polling")
+                        print("Demasiados errores, deteniendo polling")
                         polling_active = False
                         break
                         
             except Exception as e:
-                print(f"❌ Error en polling de Spotify: {e}")
+                print(f"Error en polling de Spotify: {e}")
                 error_count += 1
                 if error_count >= max_errors:
-                    print("❌ Demasiados errores, deteniendo polling")
+                    print("Demasiados errores, deteniendo polling")
                     polling_active = False
                     break
             
@@ -232,7 +238,7 @@ def start_spotify_polling():
     thread = threading.Thread(target=poll_spotify)
     thread.daemon = True
     thread.start()
-    print("✅ Hilo de polling iniciado con manejo robusto de errores")
+    # print("✅ Hilo de polling iniciado con manejo robusto de errores")
     return thread
 
 def ensure_aware_datetime(dt):
@@ -250,7 +256,7 @@ def ensure_aware_datetime(dt):
                 parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
             return parsed_dt
         except (ValueError, AttributeError):
-            print(f"❌ Error parsing datetime string: {dt}")
+            print(f"Error parsing datetime string: {dt}")
             return datetime.now(timezone.utc)
     elif isinstance(dt, datetime):
         if dt.tzinfo is None:
@@ -260,19 +266,8 @@ def ensure_aware_datetime(dt):
             # Ya es aware, retornar tal cual
             return dt
     else:
-        print(f"❌ Tipo de fecha no soportado: {type(dt)}")
+        print(f"Tipo de fecha no soportado: {type(dt)}")
         return datetime.now(timezone.utc)
-    
-def refresh_admin_spotify_token():
-    """Refrescar el token de Spotify del admin con mejor manejo de errores"""
-    global admin_spotify_token
-    
-    if not admin_spotify_token or 'refresh_token' not in admin_spotify_token:
-        print("❌ No hay refresh token disponible para refrescar")
-        return False
-        
-    refresh_token = admin_spotify_token['refresh_token']
-    token_url = "https://accounts.spotify.com/api/token"
     
     data = {
         'grant_type': 'refresh_token',
@@ -284,7 +279,7 @@ def refresh_admin_spotify_token():
     try:
         response = requests.post(token_url, data=data, timeout=10)
         if response.status_code != 200:
-            print(f"❌ Error al refrescar token: {response.status_code} - {response.text}")
+            print(f"Error al refrescar token: {response.status_code} - {response.text}")
             return False
             
         token_data = response.json()
@@ -297,9 +292,10 @@ def refresh_admin_spotify_token():
         # Spotify puede o no devolver un nuevo refresh_token
         if 'refresh_token' in token_data:
             admin_spotify_token['refresh_token'] = token_data['refresh_token']
-            print("✅ Nuevo refresh_token recibido")
+            # print("✅ Nuevo refresh_token recibido")
         else:
-            print("ℹ️  Mismo refresh_token mantenido")
+            # print("ℹ️  Mismo refresh_token mantenido")
+            pass
             
         # Guardar en base de datos
         try:
@@ -308,14 +304,14 @@ def refresh_admin_spotify_token():
                 'token_data': admin_spotify_token,  # Ahora expires_at es string ISO
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }).execute()
-            print("✅ Token refrescado y guardado en Supabase")
+            # print("✅ Token refrescado y guardado en Supabase")
         except Exception as e:
-            print(f"❌ Error guardando token refrescado en BD: {e}")
+            print(f"Error guardando token refrescado en BD: {e}")
             
         return True
         
     except Exception as e:
-        print(f"❌ Error en refresh_admin_spotify_token: {e}")
+        print(f"Error en refresh_admin_spotify_token: {e}")
         return False
 
 @app.route('/api/spotify/admin/reconnect', methods=['POST'])
@@ -336,7 +332,7 @@ def admin_spotify_reconnect():
     # Eliminar de la base de datos
     try:
         supabase.table('admin_settings').delete().eq('id', 'spotify').execute()
-        print("✅ Configuración de Spotify eliminada para reconexión")
+        # print("✅ Configuración de Spotify eliminada para reconexión")
     except Exception as e:
         print(f"Error eliminando configuración: {e}")
     
@@ -381,6 +377,10 @@ def check_playing_song():
         # SEGUNDO: Verificar si la canción existe en el ranking
         result = supabase.table('song_ranking').select('*').eq('id', track_id).execute()
         
+        # Obtener parámetro force_add del request
+        data = request.get_json() if request.is_json else {}
+        force_add = data.get('force_add', False)
+        
         if result.data and len(result.data) > 0:
             # Canción ya existe en el ranking - eliminarla y agregar al histórico
             song_data = result.data[0]
@@ -400,10 +400,31 @@ def check_playing_song():
             # También eliminar todos los votos asociados a esta canción
             supabase.table('votes').delete().eq('trackid', track_id).execute()
             
-            print(f"✅ Canción {track_id} eliminada por estar en reproducción y agregada al histórico")
+            # print(f"✅ Canción {track_id} eliminada por estar en reproducción y agregada al histórico")
             return jsonify({
                 "message": "Canción eliminada del ranking por estar en reproducción",
                 "deleted": True,
+                "added_to_history": history_response.get('action') if history_response else False,
+                "song": {
+                    "id": track_id,
+                    "name": currently_playing_cache.get('name'),
+                    "artists": currently_playing_cache.get('artists')
+                }
+            }), 200
+        elif force_add:
+            # Si force_add es True y no está en el ranking, agregar directamente al histórico
+            history_payload = {
+                'track_id': track_id,
+                'votes': 0,
+                'dislikes': 0
+            }
+            
+            history_response = add_to_song_history_internal(history_payload)
+            
+            # print(f"✅ Canción {track_id} agregada automáticamente al histórico (force_add)")
+            return jsonify({
+                "message": "Canción agregada automáticamente al histórico",
+                "deleted": False,
                 "added_to_history": history_response.get('action') if history_response else False,
                 "song": {
                     "id": track_id,
@@ -425,7 +446,7 @@ def check_playing_song():
             }), 200
             
     except Exception as e:
-        print(f"❌ Error al verificar/eliminar canción: {e}")
+        print(f"Error al verificar/eliminar canción: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 @app.route('/api/spotify/admin/add-to-history', methods=['POST'])
@@ -527,7 +548,7 @@ def force_rank_current_song():
             }
             supabase.table('votes').insert(vote_data).execute()
             
-            print(f"✅ Canción {track_id} agregada manualmente al ranking con 1 voto")
+            # print(f"✅ Canción {track_id} agregada manualmente al ranking con 1 voto")
             return jsonify({
                 "message": "Canción agregada al ranking con 1 voto",
                 "action": "added",
@@ -539,7 +560,7 @@ def force_rank_current_song():
             }), 200
             
     except Exception as e:
-        print(f"❌ Error al forzar ranking de canción: {e}")
+        print(f"Error al forzar ranking de canción: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
         
 # Función interna para agregar al histórico (para uso interno)
@@ -585,7 +606,7 @@ def add_to_song_history_internal(data):
                 .eq('track_id', track_id)\
                 .execute()
                 
-            print(f"✅ Canción actualizada en histórico: {track_id}")
+            # print(f"✅ Canción actualizada en histórico: {track_id}")
             return {"action": "updated", "song": currently_playing_cache}
         else:
             # Crear nueva entrada en el histórico
@@ -607,11 +628,11 @@ def add_to_song_history_internal(data):
             # Insertar en la base de datos
             supabase.table('song_history').insert(new_song).execute()
             
-            print(f"✅ Nueva canción agregada al histórico: {track_id}")
+            # print(f"✅ Nueva canción agregada al histórico: {track_id}")
             return {"action": "created", "song": currently_playing_cache}
             
     except Exception as e:
-        print(f"❌ Error interno al agregar al histórico: {e}")
+        print(f"Error interno al agregar al histórico: {e}")
         return {"error": str(e)}
         
 # Nuevo endpoint para obtener la canción actual del admin
@@ -633,12 +654,13 @@ def get_admin_currently_playing():
     # Verificar si el token necesita refresco automático
     expires_at_aware = ensure_aware_datetime(admin_spotify_token['expires_at'])
     if datetime.now(timezone.utc) > expires_at_aware:
-        print("🔄 Token expirado, intentando refrescar automáticamente...")
+        # print("🔄 Token expirado, intentando refrescar automáticamente...")
         if not refresh_admin_spotify_token():
             print("❌ No se pudo refrescar el token automáticamente")
             return jsonify({"error": "Token de Spotify expirado y no se pudo refrescar"}), 401
         else:
-            print("✅ Token refrescado automáticamente")
+            # print("✅ Token refrescado automáticamente")
+            pass
     
     # Obtener la canción actual
     access_token = admin_spotify_token['access_token']
@@ -680,7 +702,7 @@ def get_admin_currently_playing():
             
         elif response.status_code == 401:
             # Token inválido, intentar refrescar
-            print("🔄 Token inválido, intentando refrescar...")
+            # print("🔄 Token inválido, intentando refrescar...")
             if refresh_admin_spotify_token():
                 # Reintentar con el nuevo token
                 access_token = admin_spotify_token['access_token']
@@ -698,11 +720,11 @@ def get_admin_currently_playing():
             return jsonify({"error": "Token inválido y no se pudo refrescar"}), 401
             
         else:
-            print(f"❌ Error en API de Spotify: {response.status_code}")
+            print(f"Error en API de Spotify: {response.status_code}")
             return jsonify({"error": f"Error en API de Spotify: {response.status_code}"}), response.status_code
             
     except Exception as e:
-        print(f"❌ Error al obtener reproducción actual: {e}")
+        print(f"Error al obtener reproducción actual: {e}")
         return jsonify({"error": str(e)}), 500
 
 # Endpoint para que el admin configure su Spotify
@@ -746,11 +768,62 @@ def get_queue():
                 "queue": queue_data.get('queue', [])
             }), 200
         else:
-            print(f"❌ Error obteniendo cola: {response.status_code} - {response.text}")
+            print(f"Error obteniendo cola: {response.status_code} - {response.text}")
             return jsonify({"error": f"Error al obtener cola: {response.status_code}"}), response.status_code
             
     except Exception as e:
-        print(f"❌ Error al obtener cola: {e}")
+        print(f"Error al obtener cola: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+@app.route('/api/spotify/queue/next', methods=['GET'])
+def get_next_in_queue():
+    """Obtener la siguiente canción en la cola (público)"""
+    # No requiere verify_jwt_auth porque es para usuarios públicos
+    
+    global admin_spotify_token
+    
+    if not admin_spotify_token or not admin_spotify_token.get('access_token'):
+        return jsonify({"error": "Sistema de música no conectado"}), 503
+    
+    # Verificar si el token necesita refresco
+    expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
+        if not refresh_admin_spotify_token():
+            return jsonify({"error": "Sistema de música reconectando..."}), 503
+    
+    # Obtener la cola
+    access_token = admin_spotify_token['access_token']
+    headers = {'Authorization': f'Bearer {access_token}'}
+    
+    try:
+        response = requests.get(
+            'https://api.spotify.com/v1/me/player/queue',
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            queue_data = response.json()
+            queue_list = queue_data.get('queue', [])
+            
+            if queue_list and len(queue_list) > 0:
+                next_song = queue_list[0]
+                return jsonify({
+                    "next_song": {
+                        "name": next_song.get('name'),
+                        "artists": [artist['name'] for artist in next_song.get('artists', [])],
+                        "image": next_song.get('album', {}).get('images', [{}])[0].get('url'),
+                        "uri": next_song.get('uri')
+                    }
+                }), 200
+            else:
+                return jsonify({"message": "La cola está vacía"}), 200
+        else:
+            print(f"Error obteniendo cola para next: {response.status_code}")
+            return jsonify({"error": "Error al obtener información"}), 500
+            
+    except Exception as e:
+        print(f"Error al obtener siguiente canción: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 # Endpoint para agregar canciones a la cola de reproducción
@@ -867,7 +940,7 @@ def admin_spotify_auth():
     """Iniciar el flujo de autenticación de Spotify para el admin"""
     scope = 'user-read-currently-playing user-read-playback-state user-modify-playback-state'
     auth_url = f"https://accounts.spotify.com/authorize?response_type=code&client_id={SPOTIFY_CLIENT_ID}&scope={scope}&redirect_uri={SPOTIFY_REDIRECT_URI}&state=admin"
-    print(f"🔗 URL de auth de admin: {auth_url}")
+    # print(f"🔗 URL de auth de admin: {auth_url}")
     return jsonify({"authUrl": auth_url}), 200
 
 @app.route('/api/spotify/callback', methods=['GET'])
@@ -892,7 +965,7 @@ def spotify_callback():
     try:
         response = requests.post(token_url, data=data)
         if response.status_code != 200:
-            print(f"❌ Error al obtener token de acceso: {response.status_code} - {response.text}")
+            print(f"Error al obtener token de acceso: {response.status_code} - {response.text}")
             return jsonify({"error": "Error al obtener token de acceso"}), 400
             
         token_data = response.json()
@@ -900,7 +973,7 @@ def spotify_callback():
         refresh_token = token_data.get('refresh_token')
         expires_in = token_data['expires_in']
         
-        print(f"✅ Token obtenido de Spotify. Refresh token presente: {refresh_token is not None}")
+        # print(f"✅ Token obtenido de Spotify. Refresh token presente: {refresh_token is not None}")
         
         # Determinar si es para el admin o para usuario general
         if state == 'admin':
@@ -911,9 +984,9 @@ def spotify_callback():
                 # Si no hay refresh_token en la respuesta, intentar usar uno existente
                 if admin_spotify_token and 'refresh_token' in admin_spotify_token:
                     refresh_token = admin_spotify_token['refresh_token']
-                    print("ℹ️  Usando refresh_token existente")
+                    # print("ℹ️  Usando refresh_token existente")
                 else:
-                    print("❌ Error: No se obtuvo refresh_token en la autenticación")
+                    print("Error: No se obtuvo refresh_token en la autenticación")
                     return jsonify({"error": "Error de autenticación: falta refresh_token"}), 400
             
             # Guardar token del admin - usar UTC
@@ -925,14 +998,14 @@ def spotify_callback():
             
             # Guardar en base de datos usando la nueva función
             if not save_admin_spotify_token(admin_spotify_token):
-                print("❌ Error crítico: No se pudo guardar el token en la base de datos")
+                print("Error crítico: No se pudo guardar el token en la base de datos")
                 return jsonify({"error": "Error al guardar configuración"}), 500
             
             # Iniciar polling si no está activo
             global polling_active, polling_thread
             if not polling_active:
                 polling_thread = start_spotify_polling()
-                print("✅ Polling de Spotify iniciado")
+                # print("✅ Polling de Spotify iniciado")
             
             # Redirigir al panel de administración con mensaje de éxito
             return redirect('https://uptcmusic.com/admin-panel')
@@ -944,7 +1017,7 @@ def spotify_callback():
             }), 200
             
     except Exception as e:
-        print(f"❌ Error en callback de Spotify: {e}")
+        print(f"Error en callback de Spotify: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
     
 # Endpoint para verificar estado de autenticación de Spotify del admin
@@ -968,7 +1041,7 @@ def admin_spotify_disconnect():
     """Desconectar la cuenta de Spotify del admin"""
     global admin_spotify_token, currently_playing_cache, polling_active
     
-    print(f"🔍 Headers recibidos en disconnect: {dict(request.headers)}")
+    # print(f"🔍 Headers recibidos en disconnect: {dict(request.headers)}")
     
     # Verificar autenticación
     if not verify_jwt_auth():
@@ -982,7 +1055,7 @@ def admin_spotify_disconnect():
     # Eliminar de la base de datos
     try:
         supabase.table('admin_settings').delete().eq('id', 'spotify').execute()
-        print("✅ Token eliminado de Supabase")
+        # print("✅ Token eliminado de Supabase")
     except Exception as e:
         print(f"Error eliminando token de BD: {e}")
     
@@ -1013,7 +1086,7 @@ def get_song_history():
         return jsonify(result.data), 200
         
     except Exception as e:
-        print(f"❌ Error al obtener ranking histórico: {e}")
+        print(f"Error al obtener ranking histórico: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 # Endpoint para agregar/actualizar una canción en el histórico
@@ -1195,7 +1268,7 @@ def vote_from_history():
         return jsonify({"message": "Voto registrado correctamente"}), 200
             
     except Exception as e:
-        print(f"❌ Error al votar desde histórico: {e}")
+        print(f"Error al votar desde histórico: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 # Ruta de login mejorada
@@ -1614,7 +1687,7 @@ def handle_vote():
                     # Cambiar el voto (de like a dislike o viceversa)
                     return change_vote(track_id, user_fingerprint, is_dislike, track_info)
         except Exception as e:
-            print(f"❌ Error verificando voto existente: {e}")
+            print(f"Error verificando voto existente: {e}")
             return jsonify({"error": "Error al verificar voto"}), 500
             
         # Registrar el nuevo voto
@@ -1667,13 +1740,13 @@ def handle_vote():
                 supabase.table('song_ranking').insert(song_data).execute()
             
         except Exception as e:
-            print(f"❌ Error actualizando ranking: {e}")
+            print(f"Error actualizando ranking: {e}")
             return jsonify({"error": "Error al actualizar ranking"}), 500
         
         return jsonify({"message": "Voto registrado correctamente"}), 200
             
     except Exception as e:
-        print(f"❌ Error al registrar voto: {e}")
+        print(f"Error al registrar voto: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 def change_vote(track_id, user_fingerprint, new_is_dislike, track_info):
@@ -1738,7 +1811,7 @@ def delete_song_from_ranking(track_id):
         # También eliminar todos los votos asociados a esta canción
         supabase.table('votes').delete().eq('trackid', track_id).execute()
         
-        print(f"✅ Canción {track_id} eliminada por alcanzar 10 dislikes")
+        # print(f"✅ Canción {track_id} eliminada por alcanzar 10 dislikes")
     except Exception as e:
         print(f"Error eliminando canción por dislikes: {e}")
 
@@ -1805,14 +1878,14 @@ def handle_delete_votes():
 def save_admin_spotify_token(token_data):
     """Guardar token de Spotify en Supabase con manejo robusto de errores"""
     try:
-        print(f"💾 Intentando guardar token en Supabase: {SUPABASE_URL}")
+        # print(f"💾 Intentando guardar token en Supabase: {SUPABASE_URL}")
         
         # Verificar que la conexión a Supabase funciona
         try:
             test_result = supabase.table('admin_settings').select('count', count='exact').execute()
-            print(f"✅ Conexión a Supabase verificada: {test_result}")
+            # print(f"✅ Conexión a Supabase verificada: {test_result}")
         except Exception as e:
-            print(f"❌ Error de conexión a Supabase: {e}")
+            print(f"Error de conexión a Supabase: {e}")
             return False
         
         # Convertir datetime a string ISO para serialización JSON
@@ -1827,24 +1900,24 @@ def save_admin_spotify_token(token_data):
             'updated_at': datetime.now(timezone.utc).isoformat()
         }
         
-        print(f"📦 Datos a guardar: {json.dumps(settings_data, indent=2, default=str)}")
+        # print(f"📦 Datos a guardar: {json.dumps(settings_data, indent=2, default=str)}")
         
         # Intentar upsert
         result = supabase.table('admin_settings').upsert(settings_data).execute()
         
-        print(f"✅ Token guardado exitosamente en Supabase: {result}")
+        # print(f"✅ Token guardado exitosamente en Supabase: {result}")
         return True
         
     except Exception as e:
-        print(f"❌ Error crítico al guardar token en Supabase: {e}")
+        print(f"Error crítico al guardar token en Supabase: {e}")
         # Intentar crear el registro si no existe
         try:
-            print("🔄 Intentando insert en lugar de upsert...")
+            # print("🔄 Intentando insert en lugar de upsert...")
             result = supabase.table('admin_settings').insert(settings_data).execute()
-            print(f"✅ Token insertado exitosamente: {result}")
+            # print(f"✅ Token insertado exitosamente: {result}")
             return True
         except Exception as insert_error:
-            print(f"❌ Error también en insert: {insert_error}")
+            print(f"Error también en insert: {insert_error}")
             return False
 
 def start_token_verification():
@@ -1858,7 +1931,7 @@ def start_token_verification():
                     time_until_expiry = expires_at - datetime.now(timezone.utc)
                     
                     if time_until_expiry.total_seconds() < 300:  # 5 minutos
-                        print("🔄 Token expirará pronto, refrescando preventivamente...")
+                        # print("🔄 Token expirará pronto, refrescando preventivamente...")
                         refresh_admin_spotify_token()
                 
                 time.sleep(60)  # Verificar cada minuto
@@ -1869,7 +1942,7 @@ def start_token_verification():
     thread = threading.Thread(target=verify_token)
     thread.daemon = True
     thread.start()
-    print("✅ Verificación periódica de token iniciada")
+    # print("✅ Verificación periódica de token iniciada")
 
 @app.route('/api/votes/all', methods=['DELETE', 'OPTIONS'])
 def delete_all_votes():
@@ -1899,14 +1972,14 @@ def load_admin_spotify_token():
     global admin_spotify_token, polling_thread, polling_active
     
     try:
-        print("🔍 Intentando cargar token de Spotify desde Supabase...")
+        # print("🔍 Intentando cargar token de Spotify desde Supabase...")
         
         result = supabase.table('admin_settings').select('*').eq('id', 'spotify').execute()
-        print(f"📦 Resultado de la consulta: {result}")
+        # print(f"📦 Resultado de la consulta: {result}")
         
         if result.data and len(result.data) > 0:
             stored_token = result.data[0]['token_data']
-            print(f"✅ Token encontrado en BD: {json.dumps(stored_token, indent=2)}")
+            # print(f"✅ Token encontrado en BD: {json.dumps(stored_token, indent=2)}")
             
             # Convertir string ISO de vuelta a datetime si es necesario
             if 'expires_at' in stored_token and isinstance(stored_token['expires_at'], str):
@@ -1919,12 +1992,12 @@ def load_admin_spotify_token():
             expires_at = ensure_aware_datetime(admin_spotify_token['expires_at'])
             time_until_expiry = expires_at - datetime.now(timezone.utc)
             
-            print(f"⏰ Tiempo hasta expiración: {time_until_expiry.total_seconds()} segundos")
+            # print(f"⏰ Tiempo hasta expiración: {time_until_expiry.total_seconds()} segundos")
             
             # Resto del código...
                 
     except Exception as e:
-        print(f"❌ Error cargando token de admin: {e}")
+        print(f"Error cargando token de admin: {e}")
         admin_spotify_token = None
 
 @app.route('/api/spotify/admin/refresh-token', methods=['POST'])
@@ -2003,7 +2076,7 @@ def get_ranking_stats():
         }), 200
         
     except Exception as e:
-        print(f"❌ Error al obtener estadísticas del ranking: {e}")
+        print(f"Error al obtener estadísticas del ranking: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 # Ruta para actualizar horarios (requiere autenticación)
@@ -2043,7 +2116,7 @@ def get_voting_status():
         status = voting_manager.get_voting_status()
         return jsonify(status), 200
     except Exception as e:
-        print(f"❌ Error obteniendo estado de votación: {e}")
+        print(f"Error obteniendo estado de votación: {e}")
         return jsonify({"error": "Error al obtener estado de votación"}), 500
 
 @app.route('/api/voting/vote', methods=['POST'])
@@ -2070,7 +2143,7 @@ def handle_voting():
             return jsonify({"error": message}), 409  # 409 Conflict indica que ya votó
             
     except Exception as e:
-        print(f"❌ Error procesando voto: {e}")
+        print(f"Error procesando voto: {e}")
         return jsonify({"error": "Error al procesar voto"}), 500
 
 @app.route('/api/spotify/admin/add-to-history-confirmed', methods=['POST'])
@@ -2301,13 +2374,13 @@ try:
         
         # Test connection
         redis_client.ping()
-        print("✅ Redis Cloud conectado exitosamente")
+        # print("✅ Redis Cloud conectado exitosamente")
     else:
-        print("⚠️  Redis no configurado, usando modo en memoria")
+        # print("⚠️  Redis no configurado, usando modo en memoria")
         redis_client = None
 except Exception as e:
-    print(f"❌ Error conectando a Redis: {e}")
-    print("⚠️  Continuando sin Redis")
+    print(f"Error conectando a Redis: {e}")
+    # print("⚠️  Continuando sin Redis")
     redis_client = None
 
 # Almacenamiento en memoria como fallback
@@ -2357,7 +2430,7 @@ def get_chat_messages():
         }), 200
         
     except Exception as e:
-        print(f'❌ Error obteniendo mensajes: {e}')
+        print(f'Error obteniendo mensajes: {e}')
         return jsonify({"error": "Error obteniendo mensajes"}), 500
 
 @app.route('/api/chat/online-users', methods=['GET'])
@@ -2384,7 +2457,7 @@ def get_online_users():
                 typing_keys = redis_client.keys(f'typing:{room}:*')
                 typing_users_count = len(typing_keys)
             except Exception as redis_error:
-                print(f'⚠️  Error obteniendo typing users: {redis_error}')
+                print(f'Error obteniendo typing users: {redis_error}')
         
         # Calcular estimación de usuarios online
         unique_recent_users = recent_users_result.count if recent_users_result.count else 0
@@ -2396,7 +2469,7 @@ def get_online_users():
         }), 200
         
     except Exception as e:
-        print(f'❌ Error obteniendo usuarios online: {e}')
+        print(f'Error obteniendo usuarios online: {e}')
         return jsonify({"online_users": 1}), 200
 
 @app.route('/api/chat/send', methods=['POST'])
@@ -2458,7 +2531,7 @@ def send_chat_message():
             if not db_result.data:
                 return jsonify({"error": "Error guardando mensaje en BD"}), 500
                 
-            print(f'✅ Mensaje guardado en BD: {message_id}')
+            # print(f'✅ Mensaje guardado en BD: {message_id}')
             
             # Construir respuesta
             message_data = {
@@ -2477,11 +2550,11 @@ def send_chat_message():
             }), 200
             
         except Exception as db_error:
-            print(f'❌ Error guardando en BD: {db_error}')
+            print(f'Error guardando en BD: {db_error}')
             return jsonify({"error": "Error guardando mensaje"}), 500
         
     except Exception as e:
-        print(f'❌ Error enviando mensaje: {e}')
+        print(f'Error enviando mensaje: {e}')
         return jsonify({"error": "Error enviando mensaje"}), 500
 
 @app.route('/api/chat/validate-username', methods=['POST'])
@@ -2500,7 +2573,7 @@ def validate_username():
         
         # Verificar si es admin autenticado PRIMERO
         is_admin = is_admin_user()
-        print(f"🔍 Validando username '{username}'. Es admin: {is_admin}")
+        # print(f"🔍 Validando username '{username}'. Es admin: {is_admin}")
         
         # Verificar si es un nombre reservado exacto
         if username in reserved_names:
@@ -2526,7 +2599,7 @@ def validate_username():
         return jsonify({"valid": True}), 200
         
     except Exception as e:
-        print(f'❌ Error validando username: {e}')
+        print(f'Error validando username: {e}')
         return jsonify({"valid": False, "error": "Error validando nombre"}), 500
 
 @app.route('/api/chat/stats', methods=['GET'])
@@ -2558,7 +2631,7 @@ def get_chat_stats():
         }), 200
         
     except Exception as e:
-        print(f'❌ Error obteniendo stats: {e}')
+        print(f'Error obteniendo stats: {e}')
         return jsonify({
             'total_messages': 0,
             'messages_today': 0,
@@ -2591,12 +2664,12 @@ def set_typing_status():
                     # Remover usuario
                     redis_client.delete(f'typing:{room}:{user}')
             except Exception as e:
-                print(f'⚠️  Error actualizando typing status: {e}')
+                print(f'Error actualizando typing status: {e}')
         
         return jsonify({'success': True}), 200
         
     except Exception as e:
-        print(f'❌ Error en typing: {e}')
+        print(f'Error en typing: {e}')
         return jsonify({"error": "Error actualizando estado"}), 500
 
 @app.route('/api/chat/typing-users', methods=['GET'])
@@ -2619,7 +2692,7 @@ def get_typing_users():
                         username = key.split(':')[-1]
                         typing_users.append(username)
             except Exception as e:
-                print(f'⚠️  Error obteniendo typing users: {e}')
+                print(f'Error obteniendo typing users: {e}')
         
         return jsonify({
             'typing_users': typing_users,
@@ -2628,7 +2701,7 @@ def get_typing_users():
         }), 200
         
     except Exception as e:
-        print(f'❌ Error obteniendo typing users: {e}')
+        print(f'Error obteniendo typing users: {e}')
         return jsonify({"typing_users": []}), 200
 
 # === FUNCIONES AUXILIARES ===
@@ -2646,13 +2719,13 @@ def save_message_to_db(message_data):
             'created_at': message_data['timestamp']
         }).execute()
     except Exception as e:
-        print(f'❌ Error guardando mensaje en BD: {e}')
+        print(f'Error guardando mensaje en BD: {e}')
     
 def is_admin_user():
     """Verificar si el usuario actual es admin basado en el JWT - VERSIÓN MEJORADA"""
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        print("❌ No hay token de autorización en is_admin_user")
+        print("No hay token de autorización en is_admin_user")
         return False
         
     try:
@@ -2662,11 +2735,11 @@ def is_admin_user():
         # Verificar si el usuario existe en la base de datos y es admin
         result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
         is_admin = bool(result.data)
-        print(f"🔍 Verificación admin: {is_admin} para user_id: {payload['user_id']}")
+        # print(f"🔍 Verificación admin: {is_admin} para user_id: {payload['user_id']}")
         return is_admin
         
     except Exception as e:
-        print(f"❌ Error verificando admin en is_admin_user: {e}")
+        print(f"Error verificando admin en is_admin_user: {e}")
         return False
 
 start_token_verification()

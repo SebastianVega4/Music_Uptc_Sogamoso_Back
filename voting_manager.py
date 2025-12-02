@@ -36,7 +36,7 @@ class VotingManager:
                         with self.voting_lock:
                             if current_id != self.current_song_id:
                                 # Canción ha cambiado, reiniciar votación y limpiar votos de usuario
-                                print(f"🎵 Canción cambiada. Reiniciando votación. Anterior: {self.current_song_id}, Nueva: {current_id}")
+                                # print(f"🎵 Canción cambiada. Reiniciando votación. Anterior: {self.current_song_id}, Nueva: {current_id}")
 
                                 # Limpiar votos de usuario para la sesión anterior
                                 if self.current_song_id:
@@ -52,13 +52,13 @@ class VotingManager:
                     time.sleep(5)  # Reducir a 5 segundos para mayor responsividad
 
                 except Exception as e:
-                    print(f"❌ Error en polling de votación: {e}")
+                    print(f"Error en polling de votación: {e}")
                     time.sleep(30)
         
         self.polling_thread = threading.Thread(target=poll_voting)
         self.polling_thread.daemon = True
         self.polling_thread.start()
-        print("✅ Hilo de polling de votación iniciado")
+        # print("✅ Hilo de polling de votación iniciado")
     
     def stop_voting_polling(self):
         """Detener el polling de votación"""
@@ -82,7 +82,7 @@ class VotingManager:
             }).execute()
             
         except Exception as e:
-            print(f"❌ Error guardando estado de votación: {e}")
+            print(f"Error guardando estado de votación: {e}")
     
     def load_voting_state(self):
         """Cargar el estado de votación desde la base de datos"""
@@ -102,18 +102,18 @@ class VotingManager:
                     'repeat': voting_data.get('repeat_votes', 0)
                 }
 
-                print(f"✅ Estado de votación cargado: {self.active_votes}")
+                # print(f"✅ Estado de votación cargado: {self.active_votes}")
 
         except Exception as e:
-            print(f"❌ Error cargando estado de votación: {e}")
+            print(f"Error cargando estado de votación: {e}")
 
     def clear_user_votes_for_session(self, session_id):
         """Eliminar todos los votos de usuario para una sesión específica"""
         try:
             supabase.table('user_votes').delete().eq('vote_session', session_id).execute()
-            print(f"✅ Votos de usuario eliminados para sesión: {session_id}")
+            # print(f"✅ Votos de usuario eliminados para sesión: {session_id}")
         except Exception as e:
-            print(f"❌ Error eliminando votos de usuario: {e}")
+            print(f"Error eliminando votos de usuario: {e}")
     
     def vote(self, vote_type, user_fingerprint):
         """Registrar un voto - PERMITIR VOTOS EN TODAS LAS CATEGORÍAS"""
@@ -126,7 +126,7 @@ class VotingManager:
                 if recent_votes.data and len(recent_votes.data) > 0:
                     return False, f"Ya has votado por {self.get_vote_type_name(vote_type)} en esta sesión"
             except Exception as e:
-                print(f"❌ Error verificando voto de usuario: {e}")
+                print(f"Error verificando voto de usuario: {e}")
                 return False, "Error al verificar voto"
             if vote_type in self.active_votes:
                 self.active_votes[vote_type] += 1
@@ -164,9 +164,9 @@ class VotingManager:
                 'votes': self.active_votes,
                 'total_votes': sum(self.active_votes.values())
             }
-            print(f"🔍 DEBUG - Voting status: {status}")
-            print(f"🔍 DEBUG - Active votes: {self.active_votes}")
-            print(f"🔍 DEBUG - Current song ID: {self.current_song_id}")
+            # print(f"🔍 DEBUG - Voting status: {status}")
+            # print(f"🔍 DEBUG - Active votes: {self.active_votes}")
+            # print(f"🔍 DEBUG - Current song ID: {self.current_song_id}")
             return status
 
 # Instancia global del administrador de votaciones
