@@ -269,6 +269,17 @@ def ensure_aware_datetime(dt):
         print(f"Tipo de fecha no soportado: {type(dt)}")
         return datetime.now(timezone.utc)
     
+def refresh_admin_spotify_token():
+    """Refrescar el token de Spotify del admin"""
+    global admin_spotify_token
+    
+    if not admin_spotify_token or not admin_spotify_token.get('refresh_token'):
+        print("No hay refresh token disponible")
+        return False
+        
+    refresh_token = admin_spotify_token['refresh_token']
+    token_url = "https://accounts.spotify.com/api/token"
+    
     data = {
         'grant_type': 'refresh_token',
         'refresh_token': refresh_token,
