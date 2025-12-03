@@ -1703,6 +1703,33 @@ def get_user_fingerprint():
     fingerprint_string = f"{ip}-{user_agent}"
     return hashlib.sha256(fingerprint_string.encode()).hexdigest()
 
+def get_itunes_preview(track_name, artist_name):
+    """Buscar preview en iTunes API (público, sin key)"""
+    try:
+        if not track_name:
+            return None
+            
+        # Limpiar nombres para mejor búsqueda
+        term = f"{track_name} {artist_name}".strip()
+        params = {
+            'term': term,
+            'media': 'music',
+            'entity': 'song',
+            'limit': 1
+        }
+        
+        response = requests.get('https://itunes.apple.com/search', params=params, timeout=5)
+        
+        if response.status_code == 200:
+            results = response.json()
+            if results['resultCount'] > 0:
+                return results['results'][0].get('previewUrl')
+                
+        return None
+    except Exception as e:
+        print(f"Error buscando en iTunes: {e}")
+        return None
+
 # Endpoint para votar (accesible sin autenticación)
 @app.route('/api/vote', methods=['POST', 'OPTIONS'])
 def handle_vote():
@@ -1770,6 +1797,18 @@ def handle_vote():
                             'name': spotify_track.get('name'),
                             'artists': [artist['name'] for artist in spotify_track.get('artists', [])]
                         }
+                        
+                        # FALLBACK: Si Spotify no tiene preview_url, intentar con iTunes
+                        if not spotify_data.get('preview_url'):
+                            # print(f"⚠️ Spotify no tiene preview para '{spotify_data['name']}', buscando en iTunes...")
+                            itunes_preview = get_itunes_preview(spotify_data['name'], spotify_data['artists'][0] if spotify_data['artists'] else "")
+                            if itunes_preview:
+                                spotify_data['preview_url'] = itunes_preview
+                                # print(f"✅ Preview encontrada en iTunes: {itunes_preview}")
+                            else:
+                                # print("❌ No se encontró preview en iTunes tampoco")
+                                pass
+
                 except Exception as e:
                     print(f"Error fetching track details from Spotify in vote: {e}")
 
@@ -1793,7 +1832,7 @@ def handle_vote():
                     if not current_song.get('dedication'):
                         update_data['dedication'] = dedication
 
-                # Actualizar preview_url si falta y lo tenemos de Spotify
+                # Actualizar preview_url si falta y lo tenemos de Spotify/iTunes
                 if not current_song.get('preview_url') and spotify_data.get('preview_url'):
                     update_data['preview_url'] = spotify_data['preview_url']
                 
@@ -1808,6 +1847,11 @@ def handle_vote():
                 artists = spotify_data.get('artists') or track_info.get('artists', [])
                 image = spotify_data.get('image') or track_info.get('image', '')
                 preview_url = spotify_data.get('preview_url') or track_info.get('preview_url', '')
+                
+                # Si aún no tenemos preview_url (falló Spotify y no teníamos datos), intentar iTunes con los datos básicos
+                if not preview_url and name:
+                     artist_name = artists[0] if artists and len(artists) > 0 else ""
+                     preview_url = get_itunes_preview(name, artist_name)
 
                 song_data = {
                     'id': track_id,
