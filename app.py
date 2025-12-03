@@ -400,7 +400,8 @@ def check_playing_song():
             history_payload = {
                 'track_id': track_id,
                 'votes': song_data.get('votes', 0),
-                'dislikes': song_data.get('dislikes', 0)
+                'dislikes': song_data.get('dislikes', 0),
+                'dedication': song_data.get('dedication') # Pass dedication to history
             }
             
             history_response = add_to_song_history_internal(history_payload)
@@ -419,7 +420,8 @@ def check_playing_song():
                 "song": {
                     "id": track_id,
                     "name": currently_playing_cache.get('name'),
-                    "artists": currently_playing_cache.get('artists')
+                    "artists": currently_playing_cache.get('artists'),
+                    "dedication": song_data.get('dedication') # Return dedication
                 }
             }), 200
         elif force_add:
@@ -633,7 +635,8 @@ def add_to_song_history_internal(data):
                 'last_played_at': current_time,
                 'first_played_at': current_time,
                 'created_at': current_time,
-                'updated_at': current_time
+                'updated_at': current_time,
+                'dedication': data.get('dedication') # Save dedication to history
             }
             
             # Insertar en la base de datos
@@ -697,7 +700,8 @@ def get_admin_currently_playing():
                     'preview_url': track['preview_url'],
                     'duration_ms': track['duration_ms'],
                     'progress_ms': data['progress_ms'],
-                    'id': track['id']
+                    'id': track['id'],
+                    'dedication': get_dedication_for_track(track['id']) # Include dedication
                 }
             else:
                 currently_playing_cache = {'is_playing': False}
@@ -1278,7 +1282,8 @@ def vote_from_history():
                     'votes': 1,
                     'dislikes': 0,
                     'lastvoted': datetime.now(timezone.utc).isoformat(),
-                    'createdat': datetime.now(timezone.utc).isoformat()
+                    'createdat': datetime.now(timezone.utc).isoformat(),
+                    'dedication': song_data.get('dedication') # Restore dedication from history
                 }
                 supabase.table('song_ranking').insert(song_data).execute()
                 
@@ -1597,6 +1602,7 @@ def get_currently_playing():
                 'image': track['album']['images'][0]['url'] if track['album']['images'] else None,
                 'preview_url': track['preview_url'],
                 'duration_ms': track['duration_ms'],
+                'dedication': get_dedication_for_track(track['id']), # Fetch dedication
                 'progress_ms': data['progress_ms'],
                 'id': track['id']
             }), 200
@@ -1657,6 +1663,31 @@ def handle_search():
         print(f"Error al buscar en Spotify: {e}")
         return jsonify({"error": "Error al buscar en Spotify."}), 500
 
+def get_dedication_for_track(track_id):
+    """Obtener dedicatoria para una canción (de ranking o histórico)"""
+    try:
+        # Primero buscar en ranking (si está en cola pero sonando)
+        ranking_res = supabase.table('song_ranking').select('dedication').eq('id', track_id).execute()
+        if ranking_res.data and ranking_res.data[0].get('dedication'):
+            return ranking_res.data[0]['dedication']
+            
+        # Si no, buscar en histórico (si ya pasó a histórico)
+        # Buscar la entrada más reciente para esta canción
+        history_res = supabase.table('song_history')\
+            .select('dedication')\
+            .eq('track_id', track_id)\
+            .order('last_played_at', desc=True)\
+            .limit(1)\
+            .execute()
+            
+        if history_res.data and history_res.data[0].get('dedication'):
+            return history_res.data[0]['dedication']
+            
+        return None
+    except Exception as e:
+        print(f"Error obteniendo dedicatoria: {e}")
+        return None
+
 def get_user_fingerprint():
     """Obtener un identificador único basado en IP + User-Agent"""
     # Obtener la IP real considerando proxies
@@ -1683,6 +1714,7 @@ def handle_vote():
         track_id = data.get('trackid') or data.get('trackId')
         is_dislike = data.get('is_dislike', False)
         track_info = data.get('trackInfo', {})
+        dedication = data.get('dedication') # Get dedication from request
         
         if not track_id:
             return jsonify({"error": "ID de canción requerido"}), 400
@@ -1726,6 +1758,21 @@ def handle_vote():
         
         # Actualizar el contador de votos en la canción
         try:
+            # Intentar obtener datos frescos de Spotify para asegurar preview_url
+            spotify_data = {}
+            if sp:
+                try:
+                    spotify_track = sp.track(track_id)
+                    if spotify_track:
+                        spotify_data = {
+                            'preview_url': spotify_track.get('preview_url'),
+                            'image': spotify_track['album']['images'][0]['url'] if spotify_track.get('album') and spotify_track['album'].get('images') else None,
+                            'name': spotify_track.get('name'),
+                            'artists': [artist['name'] for artist in spotify_track.get('artists', [])]
+                        }
+                except Exception as e:
+                    print(f"Error fetching track details from Spotify in vote: {e}")
+
             # Verificar si la canción ya existe
             existing_song = supabase.table('song_ranking')\
                 .select('*')\
@@ -1741,22 +1788,38 @@ def handle_vote():
                     'lastvoted': datetime.now(timezone.utc).isoformat()
                 }
                 
+                # Update dedication only if provided and current is empty
+                if dedication:
+                    if not current_song.get('dedication'):
+                        update_data['dedication'] = dedication
+
+                # Actualizar preview_url si falta y lo tenemos de Spotify
+                if not current_song.get('preview_url') and spotify_data.get('preview_url'):
+                    update_data['preview_url'] = spotify_data['preview_url']
+                
                 supabase.table('song_ranking')\
                     .update(update_data)\
                     .eq('id', track_id)\
                     .execute()
             else:
                 # Crear nueva entrada en el ranking
+                # Usar datos de Spotify si están disponibles, sino usar track_info del request
+                name = spotify_data.get('name') or track_info.get('name', 'Unknown')
+                artists = spotify_data.get('artists') or track_info.get('artists', [])
+                image = spotify_data.get('image') or track_info.get('image', '')
+                preview_url = spotify_data.get('preview_url') or track_info.get('preview_url', '')
+
                 song_data = {
                     'id': track_id,
-                    'name': track_info.get('name', 'Unknown'),
-                    'artists': track_info.get('artists', []),
-                    'image': track_info.get('image', ''),
-                    'preview_url': track_info.get('preview_url', ''),
+                    'name': name,
+                    'artists': artists,
+                    'image': image,
+                    'preview_url': preview_url,
                     'votes': 0 if is_dislike else 1,
                     'dislikes': 1 if is_dislike else 0,
                     'lastvoted': datetime.now(timezone.utc).isoformat(),
                     'createdat': datetime.now(timezone.utc).isoformat(),
+                    'dedication': dedication # Insert dedication
                 }
                 supabase.table('song_ranking').insert(song_data).execute()
             
@@ -1862,7 +1925,8 @@ def handle_votes():
                 'preview_url': song['preview_url'],
                 'votes': song['votes'],
                 'dislikes': song.get('dislikes', 0),
-                'createdat': song['createdat'] 
+                'createdat': song['createdat'],
+                'dedication': song.get('dedication') # Include dedication in response
             }
             formatted_songs.append(formatted_song)
         
