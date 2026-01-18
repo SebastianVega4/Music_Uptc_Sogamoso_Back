@@ -2562,6 +2562,21 @@ def get_chat_messages():
         print(f'Error obteniendo mensajes: {e}')
         return jsonify({"error": "Error obteniendo mensajes"}), 500
 
+@app.route('/api/chat/messages/<message_id>', methods=['DELETE'])
+def delete_chat_message(message_id):
+    """Eliminar mensaje de chat - SOLO ADMIN"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "Credenciales inválidas"}), 401
+    
+    try:
+        # Eliminar el mensaje de la base de datos
+        result = supabase.table('chat_messages').delete().eq('id', message_id).execute()
+        
+        return jsonify({"success": True, "message": "Mensaje eliminado"}), 200
+    except Exception as e:
+        print(f"Error eliminando mensaje: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/chat/online-users', methods=['GET'])
 def get_online_users():
     """Obtener usuarios online - VERSIÓN MEJORADA"""
