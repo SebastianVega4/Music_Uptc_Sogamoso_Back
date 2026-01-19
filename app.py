@@ -3051,8 +3051,11 @@ def get_buitre_by_id(person_id):
         result = supabase.table('buitres_people').select('*').eq('id', person_id).single().execute()
         person = result.data
         
-        # ELIMINAR CORREOS SI NO ES ADMIN
-        if role != 'admin':
+        # ELIMINAR CORREOS SI NO ES ADMIN NI EL DUEÑO
+        user_email = get_current_user_email()
+        is_owner = user_email and person.get('email') and user_email.lower() == person['email'].strip().lower()
+
+        if role != 'admin' and not is_owner:
             person['email'] = None
             
         return jsonify(person), 200
@@ -3106,12 +3109,12 @@ def update_buitre(person_id):
                 return jsonify({"error": "No tienes permiso para editar este perfil"}), 403
                 
             # Si es dueño, SOLO permitir editar género (y descripción si se quiere, pero el requerimiento dice género)
-            # Limpiar todos los campos excepto gender
-            allowed_fields = ['gender']
+            # Limpiar todos los campos excepto gender y image_url
+            allowed_fields = ['gender', 'image_url']
             data = {k: v for k, v in data.items() if k in allowed_fields}
             
             if not data:
-                return jsonify({"error": "Solo puedes editar el género de tu perfil"}), 400
+                return jsonify({"error": "Solo puedes editar el género o la imagen de tu perfil"}), 400
         else:
             # Admin puede editar todo (menos lo inmutable)
             fields_to_remove = ['id', 'created_at', 'likes_count', 'dislikes_count', 'is_merged', 'merged_into']
