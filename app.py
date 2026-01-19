@@ -3247,8 +3247,26 @@ def add_buitre_detail(person_id):
                 data = result.data[0] if result.data else {"content": content, "occurrence_count": new_count}
                 return jsonify({"action": "added", "new_count": new_count, "data": data}), 200
             else:
-                # Crear nuevo tag
-                print(f"🆕 Creando nuevo tag '{content}' con contador = 1")
+                # Crear nuevo tag - VERIFICAR LÍMITE DE 5 TAGS POR USUARIO
+                print(f"🆕 Intentando crear nuevo tag '{content}'")
+                
+                # Contar cuántos tags ha creado este usuario en este perfil
+                user_tags_count = supabase.table('buitres_interactions')\
+                    .select('id', count='exact')\
+                    .eq('target_id', person_id)\
+                    .eq('target_type', 'tag_vote')\
+                    .eq('author_fingerprint', fingerprint)\
+                    .execute()
+                
+                tags_created = user_tags_count.count if user_tags_count.count else 0
+                
+                if tags_created >= 5:
+                    print(f"⛔ Usuario ya creó {tags_created} tags, límite alcanzado")
+                    return jsonify({
+                        "error": "Has alcanzado el límite de 5 etiquetas creadas por perfil. Puedes apoyar etiquetas existentes haciendo clic en ellas."
+                    }), 400
+                
+                print(f"✅ Usuario tiene {tags_created}/5 tags, permitiendo creación")
                 result = supabase.table('buitres_details').insert({
                     'person_id': person_id,
                     'content': content,
@@ -3320,6 +3338,89 @@ def delete_buitre_comment(comment_id):
         supabase.table('buitres_comments').delete().eq('id', comment_id).execute()
         return jsonify({"success": True}), 200
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/comments/<comment_id>/like', methods=['POST'])
+def like_buitre_comment(comment_id):
+    """Dar o quitar like a un comentario (toggle)"""
+    is_authed, _ = verify_uptc_auth()
+    if not is_authed:
+        return jsonify({"error": "Debes iniciar sesión para dar like"}), 401
+        
+    try:
+        data = request.get_json() or {}
+        fingerprint = data.get('fingerprint', get_user_fingerprint())
+        
+        # 1. Verificar si el usuario ya dio like a este comentario
+        print(f"🔍 Verificando like previo para comment {comment_id[:8]}... por fingerprint: {fingerprint[:8]}...")
+        interaction_check = supabase.table('buitres_interactions')\
+            .select('*')\
+            .eq('target_id', comment_id)\
+            .eq('target_type', 'comment_like')\
+            .eq('author_fingerprint', fingerprint)\
+            .execute()
+        
+        has_liked = bool(interaction_check.data)
+        
+        # 2. Obtener el comentario actual
+        comment_query = supabase.table('buitres_comments')\
+            .select('*')\
+            .eq('id', comment_id)\
+            .execute()
+        
+        if not comment_query.data:
+            return jsonify({"error": "Comentario no encontrado"}), 404
+        
+        comment = comment_query.data[0]
+        current_likes = comment.get('likes_count', 0)
+        
+        if has_liked:
+            # QUITAR LIKE
+            print(f"➖ Usuario ya dio like, removiendo...")
+            
+            # Eliminar de buitres_interactions
+            supabase.table('buitres_interactions')\
+                .delete()\
+                .eq('target_id', comment_id)\
+                .eq('target_type', 'comment_like')\
+                .eq('author_fingerprint', fingerprint)\
+                .execute()
+            
+            # Decrementar contador
+            new_likes = max(0, int(current_likes) - 1)
+            print(f"⬇️ Decrementando likes: {current_likes} -> {new_likes}")
+            
+            result = supabase.table('buitres_comments')\
+                .update({'likes_count': new_likes})\
+                .eq('id', comment_id)\
+                .execute()
+            
+            return jsonify({"action": "removed", "new_likes": new_likes}), 200
+        else:
+            # AGREGAR LIKE
+            print(f"➕ Agregando like al comentario")
+            
+            # Agregar a buitres_interactions
+            supabase.table('buitres_interactions').insert({
+                'target_id': comment_id,
+                'target_type': 'comment_like',
+                'author_fingerprint': fingerprint
+            }).execute()
+            
+            # Incrementar contador
+            new_likes = int(current_likes) + 1
+            print(f"⬆️ Incrementando likes: {current_likes} -> {new_likes}")
+            
+            result = supabase.table('buitres_comments')\
+                .update({'likes_count': new_likes})\
+                .eq('id', comment_id)\
+                .execute()
+            
+            return jsonify({"action": "added", "new_likes": new_likes}), 200
+        
+    except Exception as e:
+        print(f"❌ Error en like_buitre_comment: {e}")
+        return jsonify({"error": str(e)}), 500
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/people/<person_id>/vote', methods=['POST'])
