@@ -91,7 +91,7 @@ try:
         client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
         client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET")
     ))
-    # print("✅ Spotify configurado correctamente")
+    # print("Spotify configurado correctamente")
 except Exception as e:
     print(f"Error configurando Spotify: {e}")
     sp = None
@@ -238,7 +238,7 @@ def start_spotify_polling():
     thread = threading.Thread(target=poll_spotify)
     thread.daemon = True
     thread.start()
-    # print("✅ Hilo de polling iniciado con manejo robusto de errores")
+    # print("Hilo de polling iniciado con manejo robusto de errores")
     return thread
 
 def ensure_aware_datetime(dt):
@@ -303,9 +303,9 @@ def refresh_admin_spotify_token():
         # Spotify puede o no devolver un nuevo refresh_token
         if 'refresh_token' in token_data:
             admin_spotify_token['refresh_token'] = token_data['refresh_token']
-            # print("✅ Nuevo refresh_token recibido")
+            # print("Nuevo refresh_token recibido")
         else:
-            # print("ℹ️  Mismo refresh_token mantenido")
+            # print("Mismo refresh_token mantenido")
             pass
             
         # Guardar en base de datos
@@ -315,7 +315,7 @@ def refresh_admin_spotify_token():
                 'token_data': admin_spotify_token,  # Ahora expires_at es string ISO
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }).execute()
-            # print("✅ Token refrescado y guardado en Supabase")
+            # print("Token refrescado y guardado en Supabase")
         except Exception as e:
             print(f"Error guardando token refrescado en BD: {e}")
             
@@ -343,7 +343,7 @@ def admin_spotify_reconnect():
     # Eliminar de la base de datos
     try:
         supabase.table('admin_settings').delete().eq('id', 'spotify').execute()
-        # print("✅ Configuración de Spotify eliminada para reconexión")
+        # print("Configuración de Spotify eliminada para reconexión")
     except Exception as e:
         print(f"Error eliminando configuración: {e}")
     
@@ -412,7 +412,7 @@ def check_playing_song():
             # También eliminar todos los votos asociados a esta canción
             supabase.table('votes').delete().eq('trackid', track_id).execute()
             
-            # print(f"✅ Canción {track_id} eliminada por estar en reproducción y agregada al histórico")
+            # print(f"Canción {track_id} eliminada por estar en reproducción y agregada al histórico")
             return jsonify({
                 "message": "Canción eliminada del ranking por estar en reproducción",
                 "deleted": True,
@@ -434,7 +434,7 @@ def check_playing_song():
             
             history_response = add_to_song_history_internal(history_payload)
             
-            # print(f"✅ Canción {track_id} agregada automáticamente al histórico (force_add)")
+            # print(f"Canción {track_id} agregada automáticamente al histórico (force_add)")
             return jsonify({
                 "message": "Canción agregada automáticamente al histórico",
                 "deleted": False,
@@ -561,7 +561,7 @@ def force_rank_current_song():
             }
             supabase.table('votes').insert(vote_data).execute()
             
-            # print(f"✅ Canción {track_id} agregada manualmente al ranking con 1 voto")
+            # print(f"Canción {track_id} agregada manualmente al ranking con 1 voto")
             return jsonify({
                 "message": "Canción agregada al ranking con 1 voto",
                 "action": "added",
@@ -619,7 +619,7 @@ def add_to_song_history_internal(data):
                 .eq('track_id', track_id)\
                 .execute()
                 
-            # print(f"✅ Canción actualizada en histórico: {track_id}")
+            # print(f"Canción actualizada en histórico: {track_id}")
             return {"action": "updated", "song": currently_playing_cache}
         else:
             # Crear nueva entrada en el histórico
@@ -642,7 +642,7 @@ def add_to_song_history_internal(data):
             # Insertar en la base de datos
             supabase.table('song_history').insert(new_song).execute()
             
-            # print(f"✅ Nueva canción agregada al histórico: {track_id}")
+            # print(f"Nueva canción agregada al histórico: {track_id}")
             return {"action": "created", "song": currently_playing_cache}
             
     except Exception as e:
@@ -668,12 +668,12 @@ def get_admin_currently_playing():
     # Verificar si el token necesita refresco automático
     expires_at_aware = ensure_aware_datetime(admin_spotify_token['expires_at'])
     if datetime.now(timezone.utc) > expires_at_aware:
-        # print("🔄 Token expirado, intentando refrescar automáticamente...")
+        # print("Token expirado, intentando refrescar automáticamente...")
         if not refresh_admin_spotify_token():
-            print("❌ No se pudo refrescar el token automáticamente")
+            print("No se pudo refrescar el token automáticamente")
             return jsonify({"error": "Token de Spotify expirado y no se pudo refrescar"}), 401
         else:
-            # print("✅ Token refrescado automáticamente")
+            # print("Token refrescado automáticamente")
             pass
     
     # Obtener la canción actual
@@ -998,7 +998,7 @@ def spotify_callback():
         refresh_token = token_data.get('refresh_token')
         expires_in = token_data['expires_in']
         
-        # print(f"✅ Token obtenido de Spotify. Refresh token presente: {refresh_token is not None}")
+        # print(f"Token obtenido de Spotify. Refresh token presente: {refresh_token is not None}")
         
         # Determinar si es para el admin o para usuario general
         if state == 'admin':
@@ -1030,7 +1030,7 @@ def spotify_callback():
             global polling_active, polling_thread
             if not polling_active:
                 polling_thread = start_spotify_polling()
-                # print("✅ Polling de Spotify iniciado")
+                # print("Polling de Spotify iniciado")
             
             # Redirigir al panel de administración con mensaje de éxito
             return redirect('https://uptcmusic.com/admin-panel')
@@ -1066,7 +1066,7 @@ def admin_spotify_disconnect():
     """Desconectar la cuenta de Spotify del admin"""
     global admin_spotify_token, currently_playing_cache, polling_active
     
-    # print(f"🔍 Headers recibidos en disconnect: {dict(request.headers)}")
+    # print(f"Headers recibidos en disconnect: {dict(request.headers)}")
     
     # Verificar autenticación
     if not verify_jwt_auth():
@@ -1080,7 +1080,7 @@ def admin_spotify_disconnect():
     # Eliminar de la base de datos
     try:
         supabase.table('admin_settings').delete().eq('id', 'spotify').execute()
-        # print("✅ Token eliminado de Supabase")
+        # print("Token eliminado de Supabase")
     except Exception as e:
         print(f"Error eliminando token de BD: {e}")
     
@@ -1192,7 +1192,7 @@ def add_to_song_history():
             return jsonify({"message": "Canción agregada al histórico", "action": "created"}), 201
             
     except Exception as e:
-        print(f"❌ Error al agregar al histórico: {e}")
+        print(f" Error al agregar al histórico: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 # Endpoint para que los usuarios voten por canciones desde el ranking histórico
@@ -1879,13 +1879,13 @@ def handle_vote():
                         
                         # FALLBACK: Si Spotify no tiene preview_url, intentar con iTunes
                         if not spotify_data.get('preview_url'):
-                            # print(f"⚠️ Spotify no tiene preview para '{spotify_data['name']}', buscando en iTunes...")
+                            # print(f"Spotify no tiene preview para '{spotify_data['name']}', buscando en iTunes...")
                             itunes_preview = get_itunes_preview(spotify_data['name'], spotify_data['artists'][0] if spotify_data['artists'] else "")
                             if itunes_preview:
                                 spotify_data['preview_url'] = itunes_preview
-                                # print(f"✅ Preview encontrada en iTunes: {itunes_preview}")
+                                # print(f"Preview encontrada en iTunes: {itunes_preview}")
                             else:
-                                # print("❌ No se encontró preview en iTunes tampoco")
+                                # print("No se encontró preview en iTunes tampoco")
                                 pass
 
                 except Exception as e:
@@ -2018,7 +2018,7 @@ def delete_song_from_ranking(track_id):
         # También eliminar todos los votos asociados a esta canción
         supabase.table('votes').delete().eq('trackid', track_id).execute()
         
-        # print(f"✅ Canción {track_id} eliminada por alcanzar 10 dislikes")
+        # print(f"Canción {track_id} eliminada por alcanzar 10 dislikes")
     except Exception as e:
         print(f"Error eliminando canción por dislikes: {e}")
 
@@ -2086,12 +2086,12 @@ def handle_delete_votes():
 def save_admin_spotify_token(token_data):
     """Guardar token de Spotify en Supabase con manejo robusto de errores"""
     try:
-        # print(f"💾 Intentando guardar token en Supabase: {SUPABASE_URL}")
+        # print(f"Intentando guardar token en Supabase: {SUPABASE_URL}")
         
         # Verificar que la conexión a Supabase funciona
         try:
             test_result = supabase.table('admin_settings').select('count', count='exact').execute()
-            # print(f"✅ Conexión a Supabase verificada: {test_result}")
+            # print(f"Conexión a Supabase verificada: {test_result}")
         except Exception as e:
             print(f"Error de conexión a Supabase: {e}")
             return False
@@ -2108,21 +2108,21 @@ def save_admin_spotify_token(token_data):
             'updated_at': datetime.now(timezone.utc).isoformat()
         }
         
-        # print(f"📦 Datos a guardar: {json.dumps(settings_data, indent=2, default=str)}")
+        # print(f"Datos a guardar: {json.dumps(settings_data, indent=2, default=str)}")
         
         # Intentar upsert
         result = supabase.table('admin_settings').upsert(settings_data).execute()
         
-        # print(f"✅ Token guardado exitosamente en Supabase: {result}")
+        # print(f"Token guardado exitosamente en Supabase: {result}")
         return True
         
     except Exception as e:
         print(f"Error crítico al guardar token en Supabase: {e}")
         # Intentar crear el registro si no existe
         try:
-            # print("🔄 Intentando insert en lugar de upsert...")
+            # print("Intentando insert en lugar de upsert...")
             result = supabase.table('admin_settings').insert(settings_data).execute()
-            # print(f"✅ Token insertado exitosamente: {result}")
+            # print(f"Token insertado exitosamente: {result}")
             return True
         except Exception as insert_error:
             print(f"Error también en insert: {insert_error}")
@@ -2150,7 +2150,7 @@ def start_token_verification():
     thread = threading.Thread(target=verify_token)
     thread.daemon = True
     thread.start()
-    # print("✅ Verificación periódica de token iniciada")
+    # print("Verificación periódica de token iniciada")
 
 @app.route('/api/votes/all', methods=['DELETE', 'OPTIONS'])
 def delete_all_votes():
@@ -2180,14 +2180,14 @@ def load_admin_spotify_token():
     global admin_spotify_token, polling_thread, polling_active
     
     try:
-        # print("🔍 Intentando cargar token de Spotify desde Supabase...")
+        # print("Intentando cargar token de Spotify desde Supabase...")
         
         result = supabase.table('admin_settings').select('*').eq('id', 'spotify').execute()
-        # print(f"📦 Resultado de la consulta: {result}")
+        # print(f"Resultado de la consulta: {result}")
         
         if result.data and len(result.data) > 0:
             stored_token = result.data[0]['token_data']
-            # print(f"✅ Token encontrado en BD: {json.dumps(stored_token, indent=2)}")
+            # print(f"Token encontrado en BD: {json.dumps(stored_token, indent=2)}")
             
             # Convertir string ISO de vuelta a datetime si es necesario
             if 'expires_at' in stored_token and isinstance(stored_token['expires_at'], str):
@@ -2412,7 +2412,7 @@ def admin_add_to_history_confirmed():
             return jsonify({"error": message}), 400
             
     except Exception as e:
-        print(f"❌ Error al agregar al histórico: {e}")
+        print(f"Error al agregar al histórico: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 @app.route('/api/discussion/threads', methods=['GET'])
@@ -2582,13 +2582,13 @@ try:
         
         # Test connection
         redis_client.ping()
-        # print("✅ Redis Cloud conectado exitosamente")
+        # print("Redis Cloud conectado exitosamente")
     else:
-        # print("⚠️  Redis no configurado, usando modo en memoria")
+        # print("Redis no configurado, usando modo en memoria")
         redis_client = None
 except Exception as e:
     print(f"Error conectando a Redis: {e}")
-    # print("⚠️  Continuando sin Redis")
+    # print("Continuando sin Redis")
     redis_client = None
 
 # Almacenamiento en memoria como fallback
@@ -2754,7 +2754,7 @@ def send_chat_message():
             if not db_result.data:
                 return jsonify({"error": "Error guardando mensaje en BD"}), 500
                 
-            # print(f'✅ Mensaje guardado en BD: {message_id}')
+            # print(f'Mensaje guardado en BD: {message_id}')
             
             # Construir respuesta
             message_data = {
@@ -2796,7 +2796,7 @@ def validate_username():
         
         # Verificar si es admin autenticado PRIMERO
         is_admin = is_admin_user()
-        # print(f"🔍 Validando username '{username}'. Es admin: {is_admin}")
+        # print(f"Validando username '{username}'. Es admin: {is_admin}")
         
         # Verificar si es un nombre reservado exacto
         if username in reserved_names:
@@ -2958,7 +2958,7 @@ def is_admin_user():
         # Verificar si el usuario existe en la base de datos y es admin
         result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
         is_admin = bool(result.data)
-        # print(f"🔍 Verificación admin: {is_admin} para user_id: {payload['user_id']}")
+        # print(f"Verificación admin: {is_admin} para user_id: {payload['user_id']}")
         return is_admin
         
     except Exception as e:
@@ -3085,7 +3085,7 @@ def create_buitre():
                 
         return jsonify(result.data[0]), 201
     except Exception as e:
-        print(f"❌ Error creando buitre: {e}")
+        print(f"Error creando buitre: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/people/<person_id>', methods=['PATCH'])
@@ -3124,7 +3124,7 @@ def update_buitre(person_id):
             
         return jsonify(result.data[0]), 200
     except Exception as e:
-        print(f"❌ Error updating buitre ({person_id}): {e}")
+        print(f"Error updating buitre ({person_id}): {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/people/<person_id>', methods=['DELETE'])
@@ -3165,7 +3165,7 @@ def add_buitre_detail(person_id):
         fingerprint = data.get('fingerprint', get_user_fingerprint())
         
         # 1. Verificar si el usuario ya votó por este tag (tag_vote)
-        print(f"🔍 Verificando voto previo para tag '{content}' por fingerprint: {fingerprint[:8]}...")
+        print(f"Verificando voto previo para tag '{content}' por fingerprint: {fingerprint[:8]}...")
         interaction_check = supabase.table('buitres_interactions')\
             .select('*')\
             .eq('target_id', person_id)\
@@ -3274,12 +3274,12 @@ def add_buitre_detail(person_id):
                 creations = user_creations_count.count if user_creations_count.count else 0
                 
                 if creations >= 5:
-                    print(f"⛔ Usuario ya creó {creations} tags, límite alcanzado")
+                    print(f"Usuario ya creó {creations} tags, límite alcanzado")
                     return jsonify({
                         "error": "Has alcanzado el límite de 5 etiquetas creadas por perfil. Puedes apoyar todas las etiquetas existentes que quieras."
                     }), 400
                 
-                print(f"✅ Usuario tiene {creations}/5 creaciones, permitiendo...")
+                print(f"Usuario tiene {creations}/5 creaciones, permitiendo...")
                 
                 # 1. Crear el tag
                 result = supabase.table('buitres_details').insert({
@@ -3308,7 +3308,7 @@ def add_buitre_detail(person_id):
                 return jsonify({"action": "added", "new_count": 1, "data": data}), 201
         
     except Exception as e:
-        print(f"❌ Error en add_buitre_detail: {e}")
+        print(f"Error en add_buitre_detail: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/details/<detail_id>', methods=['DELETE'])
@@ -3357,7 +3357,7 @@ def add_buitre_comment(person_id):
         result = supabase.table('buitres_comments').insert([comment_data]).execute()
         return jsonify(result.data[0]), 201
     except Exception as e:
-        print(f"❌ Error en add_buitre_comment: {e}")
+        print(f"Error en add_buitre_comment: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/comments/<comment_id>', methods=['DELETE'])
@@ -3384,7 +3384,7 @@ def like_buitre_comment(comment_id):
         fingerprint = data.get('fingerprint', get_user_fingerprint())
         
         # 1. Verificar si el usuario ya dio like a este comentario
-        print(f"🔍 Verificando like previo para comment {comment_id[:8]}... por fingerprint: {fingerprint[:8]}...")
+        print(f"Verificando like previo para comment {comment_id[:8]}... por fingerprint: {fingerprint[:8]}...")
         interaction_check = supabase.table('buitres_interactions')\
             .select('*')\
             .eq('target_id', comment_id)\
@@ -3423,7 +3423,7 @@ def like_buitre_comment(comment_id):
             current_likes = int(raw_likes) if raw_likes is not None else 0
             new_likes = max(0, current_likes - 1)
             
-            print(f"⬇️ Decrementando likes: {current_likes} -> {new_likes}")
+            print(f"Decrementando likes: {current_likes} -> {new_likes}")
             
             result = supabase.table('buitres_comments')\
                 .update({'likes_count': new_likes})\
@@ -3431,12 +3431,12 @@ def like_buitre_comment(comment_id):
                 .execute()
             
             if not result.data:
-                print(f"⚠️ ALERTA: No se actualizó el comentario {comment_id}. Posible bloqueo RLS.")
+                print(f"ALERTA: No se actualizó el comentario {comment_id}. Posible bloqueo RLS.")
             
             return jsonify({"action": "removed", "new_likes": new_likes}), 200
         else:
             # AGREGAR LIKE
-            print(f"➕ Agregando like al comentario")
+            print(f"Agregando like al comentario")
             
             # Agregar a buitres_interactions
             supabase.table('buitres_interactions').insert({
@@ -3450,7 +3450,7 @@ def like_buitre_comment(comment_id):
             current_likes = int(raw_likes) if raw_likes is not None else 0
             new_likes = current_likes + 1
             
-            print(f"⬆️ Incrementando likes: {current_likes} -> {new_likes}")
+            print(f"Incrementando likes: {current_likes} -> {new_likes}")
             
             result = supabase.table('buitres_comments')\
                 .update({'likes_count': new_likes})\
@@ -3458,12 +3458,12 @@ def like_buitre_comment(comment_id):
                 .execute()
             
             if not result.data:
-                print(f"⚠️ ALERTA: No se actualizó el comentario {comment_id}. Posible bloqueo RLS.")
+                print(f"ALERTA: No se actualizó el comentario {comment_id}. Posible bloqueo RLS.")
             
             return jsonify({"action": "added", "new_likes": new_likes}), 200
         
     except Exception as e:
-        print(f"❌ Error en like_buitre_comment: {e}")
+        print(f"Error en like_buitre_comment: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/people/<person_id>/vote', methods=['POST'])
@@ -3488,7 +3488,7 @@ def vote_buitre(person_id):
     except Exception as e:
         if "23505" in str(e):
             return jsonify({"error": "Ya has votado por esta persona."}), 400
-        print(f"❌ Error en vote_buitre: {e}")
+        print(f"Error en vote_buitre: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/merge', methods=['POST'])
