@@ -3238,8 +3238,6 @@ def add_buitre_detail(person_id):
                 detail_id = detail_query.data[0]['id']
                 real_content = detail_query.data[0]['content'] # Usar el casing original
                 
-                print(f"➕ Agregando apoyo a tag existente '{real_content}'")
-                
                 # Registrar VOTO
                 supabase.table('buitres_interactions').insert({
                     'target_id': person_id,
@@ -3249,8 +3247,9 @@ def add_buitre_detail(person_id):
                 }).execute()
                 
                 # Incrementar
-                current_count = detail_query.data[0].get('occurrence_count', 0)
-                new_count = int(current_count) + 1
+                raw_count = detail_query.data[0].get('occurrence_count')
+                current_count = int(raw_count) if raw_count is not None else 0
+                new_count = current_count + 1
                 
                 result = supabase.table('buitres_details')\
                     .update({'occurrence_count': new_count})\
@@ -3420,13 +3419,19 @@ def like_buitre_comment(comment_id):
                 .execute()
             
             # Decrementar contador
-            new_likes = max(0, int(current_likes) - 1)
+            raw_likes = comment.get('likes_count')
+            current_likes = int(raw_likes) if raw_likes is not None else 0
+            new_likes = max(0, current_likes - 1)
+            
             print(f"⬇️ Decrementando likes: {current_likes} -> {new_likes}")
             
             result = supabase.table('buitres_comments')\
                 .update({'likes_count': new_likes})\
                 .eq('id', comment_id)\
                 .execute()
+            
+            if not result.data:
+                print(f"⚠️ ALERTA: No se actualizó el comentario {comment_id}. Posible bloqueo RLS.")
             
             return jsonify({"action": "removed", "new_likes": new_likes}), 200
         else:
@@ -3441,13 +3446,19 @@ def like_buitre_comment(comment_id):
             }).execute()
             
             # Incrementar contador
-            new_likes = int(current_likes) + 1
+            raw_likes = comment.get('likes_count')
+            current_likes = int(raw_likes) if raw_likes is not None else 0
+            new_likes = current_likes + 1
+            
             print(f"⬆️ Incrementando likes: {current_likes} -> {new_likes}")
             
             result = supabase.table('buitres_comments')\
                 .update({'likes_count': new_likes})\
                 .eq('id', comment_id)\
                 .execute()
+            
+            if not result.data:
+                print(f"⚠️ ALERTA: No se actualizó el comentario {comment_id}. Posible bloqueo RLS.")
             
             return jsonify({"action": "added", "new_likes": new_likes}), 200
         
