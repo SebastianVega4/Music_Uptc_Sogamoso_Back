@@ -3154,65 +3154,111 @@ def get_buitre_details(person_id):
 
 @app.route('/api/buitres/people/<person_id>/details', methods=['POST'])
 def add_buitre_detail(person_id):
-    """Agregar o incrementar detalle de un buitre (Manual check to allow multiple tags)"""
+    """Agregar o quitar voto de detalle de un buitre (toggle)"""
     is_authed, _ = verify_uptc_auth()
     if not is_authed:
-        return jsonify({"error": "Debes iniciar sesión para agregar etiquetas"}), 401
+        return jsonify({"error": "Debes iniciar sesión para votar etiquetas"}), 401
         
     try:
         data = request.get_json()
         content = data['content'].strip()
         fingerprint = data.get('fingerprint', get_user_fingerprint())
         
-        # 1. Verificar si el usuario ya agregó ESTA etiqueta específica
-        tag_interaction_type = f"tag:{content}"
-        check = supabase.table('buitres_interactions')\
+        # 1. Verificar si el usuario ya votó por este tag
+        # Usar las columnas existentes: target_id, target_type, author_fingerprint, content_snapshot
+        print(f"🔍 Verificando voto previo para tag '{content}' por fingerprint: {fingerprint[:8]}...")
+        interaction_check = supabase.table('buitres_interactions')\
             .select('*')\
             .eq('target_id', person_id)\
-            .eq('target_type', tag_interaction_type)\
+            .eq('target_type', 'tag_vote')\
             .eq('author_fingerprint', fingerprint)\
+            .eq('content_snapshot', content)\
             .execute()
-            
-        if check.data:
-            return jsonify({"error": f"Ya has apoyado la etiqueta '{content}' para esta persona."}), 400
-            
-        # 2. Buscar si la etiqueta ya existe para incrementarla, o crearla
+        
+        has_voted = bool(interaction_check.data)
+        
+        # 2. Buscar el tag existente
         detail_query = supabase.table('buitres_details')\
             .select('*')\
             .eq('person_id', person_id)\
             .eq('content', content)\
             .execute()
+        
+        if has_voted:
+            # REMOVER VOTO
+            print(f"➖ Usuario ya votó, removiendo apoyo de '{content}'")
             
-        if detail_query.data:
-            # Incrementar
-            detail_id = detail_query.data[0]['id']
-            new_count = detail_query.data[0]['occurrence_count'] + 1
-            result = supabase.table('buitres_details').update({'occurrence_count': new_count}).eq('id', detail_id).execute()
+            # Eliminar de buitres_interactions
+            supabase.table('buitres_interactions')\
+                .delete()\
+                .eq('target_id', person_id)\
+                .eq('target_type', 'tag_vote')\
+                .eq('author_fingerprint', fingerprint)\
+                .eq('content_snapshot', content)\
+                .execute()
+            
+            if detail_query.data:
+                detail_id = detail_query.data[0]['id']
+                current_count = detail_query.data[0].get('occurrence_count', 1)
+                new_count = max(0, int(current_count) - 1)
+                
+                if new_count == 0:
+                    # Eliminar tag completamente
+                    print(f"🗑️ Tag '{content}' llegó a 0, eliminando...")
+                    supabase.table('buitres_details').delete().eq('id', detail_id).execute()
+                    return jsonify({"action": "removed", "new_count": 0, "deleted": True}), 200
+                else:
+                    # Decrementar
+                    print(f"⬇️ Decrementando tag '{content}': {current_count} -> {new_count}")
+                    result = supabase.table('buitres_details')\
+                        .update({'occurrence_count': new_count})\
+                        .eq('id', detail_id)\
+                        .execute()
+                    data = result.data[0] if result.data else {"content": content, "occurrence_count": new_count}
+                    return jsonify({"action": "removed", "new_count": new_count, "data": data}), 200
+            else:
+                # Tag no existe pero había interacción (huérfana) - limpiar y retornar éxito
+                print(f"⚠️ Tag '{content}' no encontrado pero interacción existía (limpiada)")
+                return jsonify({"action": "removed", "new_count": 0, "deleted": True}), 200
+                
         else:
-            # Crear nueva
-            result = supabase.table('buitres_details').insert({
-                'person_id': person_id,
-                'content': content,
-                'occurrence_count': 1
-            }).execute()
+            # AGREGAR VOTO
+            print(f"➕ Agregando apoyo a '{content}'")
             
-        # 3. Registrar la interacción (Opcional, puede fallar por RLS si no hay service_role)
-        try:
+            # Agregar a buitres_interactions usando las columnas correctas
             supabase.table('buitres_interactions').insert({
                 'target_id': person_id,
-                'target_type': tag_interaction_type,
-                'author_fingerprint': fingerprint
+                'target_type': 'tag_vote',
+                'author_fingerprint': fingerprint,
+                'content_snapshot': content
             }).execute()
-        except Exception as e_rls:
-            print(f"⚠️ Aviso: No se pudo registrar interacción en buitres_interactions (posible RLS): {e_rls}")
-            # Continuamos porque el tag ya se incrementó en el paso 2
-        
-        return jsonify(result.data[0] if result.data else {}), 200
+            
+            if detail_query.data:
+                # Incrementar tag existente
+                detail_id = detail_query.data[0]['id']
+                current_count = detail_query.data[0].get('occurrence_count', 0)
+                new_count = int(current_count) + 1
+                
+                print(f"⬆️ Incrementando tag '{content}': {current_count} -> {new_count}")
+                result = supabase.table('buitres_details')\
+                    .update({'occurrence_count': new_count})\
+                    .eq('id', detail_id)\
+                    .execute()
+                data = result.data[0] if result.data else {"content": content, "occurrence_count": new_count}
+                return jsonify({"action": "added", "new_count": new_count, "data": data}), 200
+            else:
+                # Crear nuevo tag
+                print(f"🆕 Creando nuevo tag '{content}' con contador = 1")
+                result = supabase.table('buitres_details').insert({
+                    'person_id': person_id,
+                    'content': content,
+                    'occurrence_count': 1
+                }).execute()
+                data = result.data[0] if result.data else {"content": content, "occurrence_count": 1}
+                return jsonify({"action": "added", "new_count": 1, "data": data}), 201
         
     except Exception as e:
-        if "23505" in str(e):
-            return jsonify({"error": "Ya has registrado esta etiqueta."}), 400
-        print(f"❌ Error en add_buitre_detail refactored: {e}")
+        print(f"❌ Error en add_buitre_detail: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/details/<detail_id>', methods=['DELETE'])
