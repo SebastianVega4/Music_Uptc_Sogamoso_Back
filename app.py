@@ -2999,7 +2999,7 @@ def get_buitres_people():
             # Búsqueda en nombre o descripción
             query = query.or_(f"name.ilike.%{search}%,description.ilike.%{search}%")
             
-        result = query.execute()
+        result = query.limit(100).execute()
         
         # ELIMINAR CORREOS SI NO ES ADMIN
         people = result.data
@@ -3196,12 +3196,16 @@ def add_buitre_detail(person_id):
                 'occurrence_count': 1
             }).execute()
             
-        # 3. Registrar la interacción para evitar duplicados del mismo usuario
-        supabase.table('buitres_interactions').insert({
-            'target_id': person_id,
-            'target_type': tag_interaction_type,
-            'author_fingerprint': fingerprint
-        }).execute()
+        # 3. Registrar la interacción (Opcional, puede fallar por RLS si no hay service_role)
+        try:
+            supabase.table('buitres_interactions').insert({
+                'target_id': person_id,
+                'target_type': tag_interaction_type,
+                'author_fingerprint': fingerprint
+            }).execute()
+        except Exception as e_rls:
+            print(f"⚠️ Aviso: No se pudo registrar interacción en buitres_interactions (posible RLS): {e_rls}")
+            # Continuamos porque el tag ya se incrementó en el paso 2
         
         return jsonify(result.data[0] if result.data else {}), 200
         
