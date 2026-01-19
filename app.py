@@ -2965,6 +2965,18 @@ def is_admin_user():
         print(f"Error verificando admin en is_admin_user: {e}")
         return False
 
+def get_current_user_email():
+    """Obtener email del usuario actual (si es UPTC user)"""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return None
+        
+    try:
+        token = auth_header.split('Bearer ')[1]
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get('user_email')
+    except Exception:
+        return None
 
 # === ENDPOINTS BUITRES ===
 
@@ -2996,8 +3008,8 @@ def get_buitres_people():
             query = query.order('tags_count', desc=True)
             
         if search:
-            # Búsqueda en nombre o descripción
-            query = query.or_(f"name.ilike.%{search}%,description.ilike.%{search}%")
+            # Búsqueda en nombre o email
+            query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
             
         result = query.limit(100).execute()
         
@@ -3006,13 +3018,6 @@ def get_buitres_people():
         if role != 'admin':
             for person in people:
                 person['email'] = None
-                # También ocultar email en la descripción si existe
-                if 'description' in person and person['description']:
-                    import re
-                    # Reemplazar cualquier patrón de correo de la UPTC por espacio vacío o texto genérico
-                    person['description'] = re.sub(r'[\w\.-]+@uptc\.edu\.co', '[email oculto]', person['description'])
-                    # Eliminar etiquetas "Email: "
-                    person['description'] = person['description'].replace('Email: ', '')
 
         return jsonify(people), 200
     except Exception as e:
@@ -3049,11 +3054,7 @@ def get_buitre_by_id(person_id):
         # ELIMINAR CORREOS SI NO ES ADMIN
         if role != 'admin':
             person['email'] = None
-            if 'description' in person and person['description']:
-                import re
-                person['description'] = re.sub(r'[\w\.-]+@uptc\.edu\.co', '[email oculto]', person['description'])
-                person['description'] = person['description'].replace('Email: ', '')
-                
+            
         return jsonify(person), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -3073,15 +3074,7 @@ def create_buitre():
         if 'email' in data:
             person_data['email'] = data['email']
             
-        try:
-            result = supabase.table('buitres_people').insert([person_data]).execute()
-        except Exception as e:
-            # Si falla porque la columna 'email' no existe, reintentar sin ella
-            if "email" in str(e).lower() and ("not find" in str(e).lower() or "not exist" in str(e).lower() or "PGRST204" in str(e)):
-                person_data.pop('email', None)
-                result = supabase.table('buitres_people').insert([person_data]).execute()
-            else:
-                raise e
+        result = supabase.table('buitres_people').insert([person_data]).execute()
                 
         return jsonify(result.data[0]), 201
     except Exception as e:
@@ -3090,8 +3083,9 @@ def create_buitre():
 
 @app.route('/api/buitres/people/<person_id>', methods=['PATCH'])
 def update_buitre(person_id):
-    """Actualizar un buitre (requiere admin)"""
-    if not verify_jwt_auth():
+    """Actualizar un buitre (requiere admin o dueño del perfil)"""
+    is_authed, role = verify_uptc_auth()
+    if not is_authed:
         return jsonify({"error": "No autorizado"}), 401
         
     try:
@@ -3099,10 +3093,30 @@ def update_buitre(person_id):
         if not data:
             return jsonify({"error": "No data provided"}), 400
             
-        # Eliminar campos que no deben actualizarse manualmente
-        fields_to_remove = ['id', 'created_at', 'likes_count', 'dislikes_count', 'is_merged', 'merged_into']
-        for field in fields_to_remove:
-            data.pop(field, None)
+        # Verificar permisos
+        if role != 'admin':
+            # Si no es admin, verificar si es el dueño
+            user_email = get_current_user_email()
+            
+            # Obtener perfil para verificar email
+            person_result = supabase.table('buitres_people').select('email').eq('id', person_id).single().execute()
+            person = person_result.data
+            
+            if not person or not person.get('email') or person['email'] != user_email:
+                return jsonify({"error": "No tienes permiso para editar este perfil"}), 403
+                
+            # Si es dueño, SOLO permitir editar género (y descripción si se quiere, pero el requerimiento dice género)
+            # Limpiar todos los campos excepto gender
+            allowed_fields = ['gender']
+            data = {k: v for k, v in data.items() if k in allowed_fields}
+            
+            if not data:
+                return jsonify({"error": "Solo puedes editar el género de tu perfil"}), 400
+        else:
+            # Admin puede editar todo (menos lo inmutable)
+            fields_to_remove = ['id', 'created_at', 'likes_count', 'dislikes_count', 'is_merged', 'merged_into']
+            for field in fields_to_remove:
+                data.pop(field, None)
             
         if not data:
             return jsonify({"error": "No valid fields to update"}), 400
@@ -3110,14 +3124,7 @@ def update_buitre(person_id):
         try:
             result = supabase.table('buitres_people').update(data).eq('id', person_id).execute()
         except Exception as e:
-            # Si falla porque la columna 'email' no existe, removerla y reintentar
-            if "email" in str(e).lower() and ("not find" in str(e).lower() or "not exist" in str(e).lower() or "PGRST204" in str(e)):
-                data.pop('email', None)
-                if not data:
-                    return jsonify({"error": "No valid fields to update after removing email"}), 400
-                result = supabase.table('buitres_people').update(data).eq('id', person_id).execute()
-            else:
-                raise e
+            raise e
         
         if not result.data:
             return jsonify({"error": "Profile not found or no changes applied"}), 404
@@ -3313,11 +3320,30 @@ def add_buitre_detail(person_id):
 
 @app.route('/api/buitres/details/<detail_id>', methods=['DELETE'])
 def delete_buitre_detail(detail_id):
-    """Eliminar detalle (requiere admin)"""
-    if not verify_jwt_auth():
+    """Eliminar detalle (requiere admin o dueño del perfil)"""
+    is_authed, role = verify_uptc_auth()
+    if not is_authed:
         return jsonify({"error": "No autorizado"}), 401
         
     try:
+        if role != 'admin':
+             # Verificar si es dueño
+             user_email = get_current_user_email()
+             
+             # 1. Obtener el detalle para saber el person_id
+             detail_res = supabase.table('buitres_details').select('person_id').eq('id', detail_id).single().execute()
+             if not detail_res.data:
+                 return jsonify({"error": "Detalle no encontrado"}), 404
+             
+             person_id = detail_res.data['person_id']
+             
+             # 2. Verificar email del perfil
+             person_res = supabase.table('buitres_people').select('email').eq('id', person_id).single().execute()
+             person = person_res.data
+             
+             if not person or not person.get('email') or person['email'] != user_email:
+                 return jsonify({"error": "No tienes permiso para eliminar etiquetas de este perfil"}), 403
+
         supabase.table('buitres_details').delete().eq('id', detail_id).execute()
         return jsonify({"success": True}), 200
     except Exception as e:
@@ -3362,11 +3388,30 @@ def add_buitre_comment(person_id):
 
 @app.route('/api/buitres/comments/<comment_id>', methods=['DELETE'])
 def delete_buitre_comment(comment_id):
-    """Eliminar comentario (requiere admin)"""
-    if not verify_jwt_auth():
+    """Eliminar comentario (requiere admin o dueño del perfil)"""
+    is_authed, role = verify_uptc_auth()
+    if not is_authed:
         return jsonify({"error": "No autorizado"}), 401
         
     try:
+        if role != 'admin':
+             # Verificar si es dueño
+             user_email = get_current_user_email()
+             
+             # 1. Obtener el comentario para saber el person_id
+             comment_res = supabase.table('buitres_comments').select('person_id').eq('id', comment_id).single().execute()
+             if not comment_res.data:
+                 return jsonify({"error": "Comentario no encontrado"}), 404
+             
+             person_id = comment_res.data['person_id']
+             
+             # 2. Verificar email del perfil
+             person_res = supabase.table('buitres_people').select('email').eq('id', person_id).single().execute()
+             person = person_res.data
+             
+             if not person or not person.get('email') or person['email'] != user_email:
+                 return jsonify({"error": "No tienes permiso para eliminar comentarios de este perfil"}), 403
+
         supabase.table('buitres_comments').delete().eq('id', comment_id).execute()
         return jsonify({"success": True}), 200
     except Exception as e:
