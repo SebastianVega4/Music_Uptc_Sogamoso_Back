@@ -61,7 +61,7 @@ def after_request(response):
         response.headers.add('Access-Control-Allow-Origin', origin)
     response.headers.add('Access-Control-Allow-Credentials', 'true')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,PATCH,OPTIONS')
     return response
 
 # Configuración de Supabase
@@ -101,7 +101,7 @@ except Exception as e:
 def handle_preflight():
     if request.method == "OPTIONS":
         response = jsonify()
-        response.headers.add("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+        response.headers.add("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, PATCH, OPTIONS")
         response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
         response.headers.add("Access-Control-Allow-Credentials", "true")
         return response
@@ -2885,6 +2885,268 @@ def is_admin_user():
     except Exception as e:
         print(f"Error verificando admin en is_admin_user: {e}")
         return False
+
+
+# === ENDPOINTS BUITRES ===
+
+@app.route('/api/buitres/people', methods=['GET'])
+def get_buitres_people():
+    """Obtener lista de buitres con búsqueda y ordenamiento"""
+    try:
+        search = request.args.get('search', '')
+        sort_by = request.args.get('sortBy', 'recent')
+        
+        table_name = 'buitres_people'
+        if sort_by in ['comments', 'tags']:
+            table_name = 'buitres_stats'
+            
+        query = supabase.table(table_name).select('*').eq('is_merged', False)
+        
+        if sort_by == 'recent':
+            query = query.order('created_at', desc=True)
+        elif sort_by == 'likes':
+            query = query.order('likes_count', desc=True)
+        elif sort_by == 'comments':
+            query = query.order('comments_count', desc=True)
+        elif sort_by == 'tags':
+            query = query.order('tags_count', desc=True)
+            
+        if search:
+            # Búsqueda en nombre o descripción
+            query = query.or_(f"name.ilike.%{search}%,description.ilike.%{search}%")
+            
+        result = query.execute()
+        return jsonify(result.data), 200
+    except Exception as e:
+        print(f"Error obteniendo buitres: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/count', methods=['GET'])
+def get_buitres_count():
+    """Obtener total de buitres"""
+    try:
+        result = supabase.table('buitres_people')\
+            .select('id', count='exact')\
+            .eq('is_merged', False)\
+            .execute()
+        return jsonify({"count": result.count if result.count else 0}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/<person_id>', methods=['GET'])
+def get_buitre_by_id(person_id):
+    """Obtener un buitre específico"""
+    try:
+        result = supabase.table('buitres_people').select('*').eq('id', person_id).single().execute()
+        return jsonify(result.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people', methods=['POST'])
+def create_buitre():
+    """Crear un nuevo buitre"""
+    try:
+        data = request.get_json()
+        person_data = {
+            'name': data['name'],
+            'description': data['description'],
+            'gender': data['gender']
+        }
+        
+        # Intentar insertar con email si viene en los datos
+        if 'email' in data:
+            person_data['email'] = data['email']
+            
+        try:
+            result = supabase.table('buitres_people').insert([person_data]).execute()
+        except Exception as e:
+            # Si falla porque la columna 'email' no existe, reintentar sin ella
+            if "email" in str(e).lower() and ("not find" in str(e).lower() or "not exist" in str(e).lower() or "PGRST204" in str(e)):
+                person_data.pop('email', None)
+                result = supabase.table('buitres_people').insert([person_data]).execute()
+            else:
+                raise e
+                
+        return jsonify(result.data[0]), 201
+    except Exception as e:
+        print(f"❌ Error creando buitre: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/<person_id>', methods=['PATCH'])
+def update_buitre(person_id):
+    """Actualizar un buitre (requiere admin)"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "No autorizado"}), 401
+        
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
+        # Eliminar campos que no deben actualizarse manualmente
+        fields_to_remove = ['id', 'created_at', 'likes_count', 'dislikes_count', 'is_merged', 'merged_into']
+        for field in fields_to_remove:
+            data.pop(field, None)
+            
+        if not data:
+            return jsonify({"error": "No valid fields to update"}), 400
+            
+        try:
+            result = supabase.table('buitres_people').update(data).eq('id', person_id).execute()
+        except Exception as e:
+            # Si falla porque la columna 'email' no existe, removerla y reintentar
+            if "email" in str(e).lower() and ("not find" in str(e).lower() or "not exist" in str(e).lower() or "PGRST204" in str(e)):
+                data.pop('email', None)
+                if not data:
+                    return jsonify({"error": "No valid fields to update after removing email"}), 400
+                result = supabase.table('buitres_people').update(data).eq('id', person_id).execute()
+            else:
+                raise e
+        
+        if not result.data:
+            return jsonify({"error": "Profile not found or no changes applied"}), 404
+            
+        return jsonify(result.data[0]), 200
+    except Exception as e:
+        print(f"❌ Error updating buitre ({person_id}): {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/<person_id>', methods=['DELETE'])
+def delete_buitre(person_id):
+    """Eliminar un buitre (requiere admin)"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "No autorizado"}), 401
+        
+    try:
+        supabase.table('buitres_people').delete().eq('id', person_id).execute()
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/<person_id>/details', methods=['GET'])
+def get_buitre_details(person_id):
+    """Obtener detalles de un buitre"""
+    try:
+        result = supabase.table('buitres_details')\
+            .select('*')\
+            .eq('person_id', person_id)\
+            .order('occurrence_count', desc=True)\
+            .execute()
+        return jsonify(result.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/<person_id>/details', methods=['POST'])
+def add_buitre_detail(person_id):
+    """Agregar o incrementar detalle de un buitre"""
+    try:
+        data = request.get_json()
+        content = data['content']
+        fingerprint = data.get('fingerprint', get_user_fingerprint())
+        
+        result = supabase.rpc('increment_detail', {
+            'p_person_id': person_id,
+            'p_content': content.strip(),
+            'p_fingerprint': fingerprint
+        }).execute()
+        
+        return jsonify(result.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/details/<detail_id>', methods=['DELETE'])
+def delete_buitre_detail(detail_id):
+    """Eliminar detalle (requiere admin)"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "No autorizado"}), 401
+        
+    try:
+        supabase.table('buitres_details').delete().eq('id', detail_id).execute()
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/<person_id>/comments', methods=['GET'])
+def get_buitre_comments(person_id):
+    """Obtener comentarios de un buitre"""
+    try:
+        result = supabase.table('buitres_comments')\
+            .select('*')\
+            .eq('person_id', person_id)\
+            .order('created_at', desc=True)\
+            .execute()
+        return jsonify(result.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/<person_id>/comments', methods=['POST'])
+def add_buitre_comment(person_id):
+    """Agregar comentario a un buitre"""
+    try:
+        data = request.get_json()
+        content = data['content']
+        fingerprint = data.get('fingerprint', get_user_fingerprint())
+        
+        comment_data = {
+            'person_id': person_id,
+            'content': content,
+            'author_fingerprint': fingerprint
+        }
+        
+        result = supabase.table('buitres_comments').insert([comment_data]).execute()
+        return jsonify(result.data[0]), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/comments/<comment_id>', methods=['DELETE'])
+def delete_buitre_comment(comment_id):
+    """Eliminar comentario (requiere admin)"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "No autorizado"}), 401
+        
+    try:
+        supabase.table('buitres_comments').delete().eq('id', comment_id).execute()
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/people/<person_id>/vote', methods=['POST'])
+def vote_buitre(person_id):
+    """Votar por un buitre"""
+    try:
+        data = request.get_json()
+        vote_type = data['type']
+        fingerprint = data.get('fingerprint', get_user_fingerprint())
+        
+        result = supabase.rpc('vote_person', {
+            'p_person_id': person_id,
+            'p_type': vote_type,
+            'p_fingerprint': fingerprint
+        }).execute()
+        
+        return jsonify(result.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/merge', methods=['POST'])
+def merge_buitres():
+    """Fusionar dos buitres (requiere admin)"""
+    if not verify_jwt_auth():
+        return jsonify({"error": "No autorizado"}), 401
+        
+    try:
+        data = request.get_json()
+        keep_id = data['keepId']
+        remove_id = data['removeId']
+        
+        result = supabase.rpc('merge_buitres', {
+            'p_keep_id': keep_id,
+            'p_remove_id': remove_id
+        }).execute()
+        
+        return jsonify(result.data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 start_token_verification()
 
