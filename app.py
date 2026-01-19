@@ -1297,6 +1297,80 @@ def vote_from_history():
         print(f"Error al votar desde histórico: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
+# Endpoint para verificar Google ID Token (UPTC restringido)
+@app.route('/api/auth/google', methods=['POST'])
+def google_auth():
+    """Verificar Google ID Token y emitir JWT si es @uptc.edu.co"""
+    try:
+        data = request.get_json()
+        id_token = data.get('idToken')
+        
+        if not id_token:
+            return jsonify({"error": "Google ID Token requerido"}), 400
+            
+        # En un entorno real usaríamos google-auth-library para verificar el token
+        # Para este MVP, haremos una petición a la API de Google para validar
+        # NOTA: En producción se recomienda google.oauth2.id_token.verify_oauth2_token
+        google_verify_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}"
+        response = requests.get(google_verify_url)
+        
+        if response.status_code != 200:
+            return jsonify({"error": "Token de Google inválido"}), 401
+            
+        token_info = response.json()
+        email = token_info.get('email', '')
+        
+        # RESTRICCIÓN DE DOMINIO UPTC
+        if not email.endswith('@uptc.edu.co'):
+             return jsonify({"error": "Solo se permiten cuentas institucionales @uptc.edu.co"}), 403
+             
+        # Generar token JWT para usuario UPTC
+        token = jwt.encode({
+            'user_email': email,
+            'role': 'uptc_user',
+            'exp': datetime.now(timezone.utc) + timedelta(days=7)
+        }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        
+        return jsonify({
+            "token": token,
+            "user": {
+                "email": email,
+                "role": "uptc_user"
+            }
+        }), 200
+            
+    except Exception as e:
+        print(f"Error en Google auth: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+def verify_uptc_auth():
+    """Verificar si el usuario es Admin o UPTC User"""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return False, None
+        
+    try:
+        token = auth_header.split('Bearer ')[1]
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        # Caso 1: Es Admin (tiene user_id)
+        if 'user_id' in payload:
+            result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
+            if result.data:
+                return True, 'admin'
+                
+        # Caso 2: Es usuario UPTC (tiene role uptc_user)
+        if payload.get('role') == 'uptc_user':
+            return True, 'uptc_user'
+            
+        return False, None
+    except Exception:
+        return False, None
+
+def mask_email(email):
+    """Eliminar correo por completo para no-admins: Retorna None"""
+    return None
+
 # Ruta de login mejorada
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -1327,7 +1401,8 @@ def login():
             "token": token,
             "user": {
                 "id": user['id'],
-                "email": user['email']
+                "email": user['email'],
+                "role": "admin"
             }
         }), 200
             
@@ -2891,7 +2966,12 @@ def is_admin_user():
 
 @app.route('/api/buitres/people', methods=['GET'])
 def get_buitres_people():
-    """Obtener lista de buitres con búsqueda y ordenamiento"""
+    """Obtener lista de buitres con búsqueda y ordenamiento (RESTRINGIDO)"""
+    # VERIFICAR AUTENTICACIÓN
+    is_authed, role = verify_uptc_auth()
+    if not is_authed:
+        return jsonify({"error": "Debes iniciar sesión con tu cuenta UPTC para ver esta sección"}), 401
+
     try:
         search = request.args.get('search', '')
         sort_by = request.args.get('sortBy', 'recent')
@@ -2916,14 +2996,32 @@ def get_buitres_people():
             query = query.or_(f"name.ilike.%{search}%,description.ilike.%{search}%")
             
         result = query.execute()
-        return jsonify(result.data), 200
+        
+        # ELIMINAR CORREOS SI NO ES ADMIN
+        people = result.data
+        if role != 'admin':
+            for person in people:
+                person['email'] = None
+                # También ocultar email en la descripción si existe
+                if 'description' in person and person['description']:
+                    import re
+                    # Reemplazar cualquier patrón de correo de la UPTC por espacio vacío o texto genérico
+                    person['description'] = re.sub(r'[\w\.-]+@uptc\.edu\.co', '[email oculto]', person['description'])
+                    # Eliminar etiquetas "Email: "
+                    person['description'] = person['description'].replace('Email: ', '')
+
+        return jsonify(people), 200
     except Exception as e:
         print(f"Error obteniendo buitres: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/people/count', methods=['GET'])
 def get_buitres_count():
-    """Obtener total de buitres"""
+    """Obtener total de buitres (RESTRINGIDO)"""
+    is_authed, _ = verify_uptc_auth()
+    if not is_authed:
+        return jsonify({"count": 0}), 401
+
     try:
         result = supabase.table('buitres_people')\
             .select('id', count='exact')\
@@ -2935,10 +3033,24 @@ def get_buitres_count():
 
 @app.route('/api/buitres/people/<person_id>', methods=['GET'])
 def get_buitre_by_id(person_id):
-    """Obtener un buitre específico"""
+    """Obtener un buitre específico (RESTRINGIDO)"""
+    is_authed, role = verify_uptc_auth()
+    if not is_authed:
+        return jsonify({"error": "No autorizado"}), 401
+
     try:
         result = supabase.table('buitres_people').select('*').eq('id', person_id).single().execute()
-        return jsonify(result.data), 200
+        person = result.data
+        
+        # ELIMINAR CORREOS SI NO ES ADMIN
+        if role != 'admin':
+            person['email'] = None
+            if 'description' in person and person['description']:
+                import re
+                person['description'] = re.sub(r'[\w\.-]+@uptc\.edu\.co', '[email oculto]', person['description'])
+                person['description'] = person['description'].replace('Email: ', '')
+                
+        return jsonify(person), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
