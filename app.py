@@ -1371,6 +1371,10 @@ def mask_email(email):
     """Eliminar correo por completo para no-admins: Retorna None"""
     return None
 
+def get_user_fingerprint():
+    """Fallback: Generar un fingerprint basado en la IP"""
+    return request.remote_addr or 'anonymous'
+
 # Ruta de login mejorada
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -3150,20 +3154,61 @@ def get_buitre_details(person_id):
 
 @app.route('/api/buitres/people/<person_id>/details', methods=['POST'])
 def add_buitre_detail(person_id):
-    """Agregar o incrementar detalle de un buitre"""
+    """Agregar o incrementar detalle de un buitre (Manual check to allow multiple tags)"""
+    is_authed, _ = verify_uptc_auth()
+    if not is_authed:
+        return jsonify({"error": "Debes iniciar sesión para agregar etiquetas"}), 401
+        
     try:
         data = request.get_json()
-        content = data['content']
+        content = data['content'].strip()
         fingerprint = data.get('fingerprint', get_user_fingerprint())
         
-        result = supabase.rpc('increment_detail', {
-            'p_person_id': person_id,
-            'p_content': content.strip(),
-            'p_fingerprint': fingerprint
+        # 1. Verificar si el usuario ya agregó ESTA etiqueta específica
+        tag_interaction_type = f"tag:{content}"
+        check = supabase.table('buitres_interactions')\
+            .select('*')\
+            .eq('target_id', person_id)\
+            .eq('target_type', tag_interaction_type)\
+            .eq('author_fingerprint', fingerprint)\
+            .execute()
+            
+        if check.data:
+            return jsonify({"error": f"Ya has apoyado la etiqueta '{content}' para esta persona."}), 400
+            
+        # 2. Buscar si la etiqueta ya existe para incrementarla, o crearla
+        detail_query = supabase.table('buitres_details')\
+            .select('*')\
+            .eq('person_id', person_id)\
+            .eq('content', content)\
+            .execute()
+            
+        if detail_query.data:
+            # Incrementar
+            detail_id = detail_query.data[0]['id']
+            new_count = detail_query.data[0]['occurrence_count'] + 1
+            result = supabase.table('buitres_details').update({'occurrence_count': new_count}).eq('id', detail_id).execute()
+        else:
+            # Crear nueva
+            result = supabase.table('buitres_details').insert({
+                'person_id': person_id,
+                'content': content,
+                'occurrence_count': 1
+            }).execute()
+            
+        # 3. Registrar la interacción para evitar duplicados del mismo usuario
+        supabase.table('buitres_interactions').insert({
+            'target_id': person_id,
+            'target_type': tag_interaction_type,
+            'author_fingerprint': fingerprint
         }).execute()
         
-        return jsonify(result.data), 200
+        return jsonify(result.data[0] if result.data else {}), 200
+        
     except Exception as e:
+        if "23505" in str(e):
+            return jsonify({"error": "Ya has registrado esta etiqueta."}), 400
+        print(f"❌ Error en add_buitre_detail refactored: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/details/<detail_id>', methods=['DELETE'])
@@ -3194,6 +3239,10 @@ def get_buitre_comments(person_id):
 @app.route('/api/buitres/people/<person_id>/comments', methods=['POST'])
 def add_buitre_comment(person_id):
     """Agregar comentario a un buitre"""
+    is_authed, _ = verify_uptc_auth()
+    if not is_authed:
+        return jsonify({"error": "Debes iniciar sesión para comentar"}), 401
+        
     try:
         data = request.get_json()
         content = data['content']
@@ -3208,6 +3257,7 @@ def add_buitre_comment(person_id):
         result = supabase.table('buitres_comments').insert([comment_data]).execute()
         return jsonify(result.data[0]), 201
     except Exception as e:
+        print(f"❌ Error en add_buitre_comment: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/comments/<comment_id>', methods=['DELETE'])
@@ -3225,6 +3275,10 @@ def delete_buitre_comment(comment_id):
 @app.route('/api/buitres/people/<person_id>/vote', methods=['POST'])
 def vote_buitre(person_id):
     """Votar por un buitre"""
+    is_authed, _ = verify_uptc_auth()
+    if not is_authed:
+        return jsonify({"error": "Debes iniciar sesión para votar"}), 401
+        
     try:
         data = request.get_json()
         vote_type = data['type']
@@ -3238,6 +3292,9 @@ def vote_buitre(person_id):
         
         return jsonify(result.data), 200
     except Exception as e:
+        if "23505" in str(e):
+            return jsonify({"error": "Ya has votado por esta persona."}), 400
+        print(f"❌ Error en vote_buitre: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/merge', methods=['POST'])
