@@ -2996,22 +2996,42 @@ def get_buitres_people():
         if sort_by in ['comments', 'tags']:
             table_name = 'buitres_stats'
             
+        # Construir la base de la consulta
         query = supabase.table(table_name).select('*').eq('is_merged', False)
         
-        if sort_by == 'recent':
-            query = query.order('created_at', desc=True)
-        elif sort_by == 'likes':
-            query = query.order('likes_count', desc=True)
-        elif sort_by == 'comments':
-            query = query.order('comments_count', desc=True)
-        elif sort_by == 'tags':
-            query = query.order('tags_count', desc=True)
-            
+        # Aplicar búsqueda si existe
         if search:
-            # Búsqueda en nombre o email
-            query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
-            
-        result = query.limit(100).execute()
+            words = search.strip().split()
+            if words:
+                if len(words) == 1:
+                    query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
+                else:
+                    for word in words:
+                        query = query.ilike("name", f"%{word}%")
+
+        # Aplicar ordenamiento
+        if sort_by == 'recent':
+            try:
+                # Intentar ordenar por updated_at (actividad reciente)
+                result = query.order('updated_at', desc=True).order('created_at', desc=True).limit(100).execute()
+            except Exception as e:
+                # Fallback a created_at si updated_at falla (columna inexistente)
+                print(f"Fallback a created_at: {e}")
+                # Reiniciar query para evitar error de columna inválida si el cliente guardó el estado
+                query = supabase.table(table_name).select('*').eq('is_merged', False)
+                if search:
+                    words = search.strip().split()
+                    for word in words:
+                        query = query.ilike("name", f"%{word}%")
+                result = query.order('created_at', desc=True).limit(100).execute()
+        elif sort_by == 'likes':
+            result = query.order('likes_count', desc=True).limit(100).execute()
+        elif sort_by == 'comments':
+            result = query.order('comments_count', desc=True).limit(100).execute()
+        elif sort_by == 'tags':
+            result = query.order('tags_count', desc=True).limit(100).execute()
+        else:
+            result = query.limit(100).execute()
         
         # ELIMINAR CORREOS SI NO ES ADMIN
         people = result.data
@@ -3021,7 +3041,7 @@ def get_buitres_people():
 
         return jsonify(people), 200
     except Exception as e:
-        print(f"Error obteniendo buitres: {e}")
+        print(f"Error general obteniendo buitres: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/buitres/people/count', methods=['GET'])
@@ -3067,10 +3087,13 @@ def create_buitre():
     """Crear un nuevo buitre"""
     try:
         data = request.get_json()
+        now = datetime.now(timezone.utc).isoformat()
         person_data = {
             'name': data['name'],
             'description': data['description'],
-            'gender': data['gender']
+            'gender': data['gender'],
+            'updated_at': now,
+            'created_at': now
         }
         
         # Intentar insertar con email si viene en los datos
@@ -3120,9 +3143,9 @@ def update_buitre(person_id):
             fields_to_remove = ['id', 'created_at', 'likes_count', 'dislikes_count', 'is_merged', 'merged_into']
             for field in fields_to_remove:
                 data.pop(field, None)
-            
-        if not data:
-            return jsonify({"error": "No valid fields to update"}), 400
+        
+        # Siempre actualizar la fecha de actividad
+        data['updated_at'] = datetime.now(timezone.utc).isoformat()
             
         try:
             result = supabase.table('buitres_people').update(data).eq('id', person_id).execute()
@@ -3162,6 +3185,15 @@ def get_buitre_details(person_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+def update_buitre_activity(person_id):
+    """Actualizar la fecha de última actividad de un buitre"""
+    try:
+        supabase.table('buitres_people').update({
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }).eq('id', person_id).execute()
+    except Exception as e:
+        print(f"Error actualizando actividad: {e}")
+
 @app.route('/api/buitres/people/<person_id>/details', methods=['POST'])
 def add_buitre_detail(person_id):
     """Agregar o quitar voto de detalle de un buitre (toggle)"""
@@ -3170,6 +3202,9 @@ def add_buitre_detail(person_id):
         return jsonify({"error": "Debes iniciar sesión para votar etiquetas"}), 401
         
     try:
+        # Actualizar actividad del perfil
+        update_buitre_activity(person_id)
+        
         data = request.get_json()
         content = data['content'].strip()
         fingerprint = data.get('fingerprint', get_user_fingerprint())
@@ -3195,7 +3230,7 @@ def add_buitre_detail(person_id):
         
         if has_voted:
             # REMOVER VOTO (Solo quitamos el voto, NO la marca de creación 'tag_create' si la hubiera)
-            print(f"➖ Usuario ya votó, removiendo apoyo de '{content}'")
+            print(f"Usuario ya votó, removiendo apoyo de '{content}'")
             
             # Eliminar de buitres_interactions
             supabase.table('buitres_interactions')\
@@ -3329,16 +3364,19 @@ def delete_buitre_detail(detail_id):
         return jsonify({"error": "No autorizado"}), 401
         
     try:
+        # 1. Obtener el detalle para saber el person_id
+        detail_res = supabase.table('buitres_details').select('person_id').eq('id', detail_id).single().execute()
+        if not detail_res.data:
+            return jsonify({"error": "Detalle no encontrado"}), 404
+        
+        person_id = detail_res.data['person_id']
+        
+        # Actualizar actividad
+        update_buitre_activity(person_id)
+
         if role != 'admin':
              # Verificar si es dueño
              user_email = get_current_user_email()
-             
-             # 1. Obtener el detalle para saber el person_id
-             detail_res = supabase.table('buitres_details').select('person_id').eq('id', detail_id).single().execute()
-             if not detail_res.data:
-                 return jsonify({"error": "Detalle no encontrado"}), 404
-             
-             person_id = detail_res.data['person_id']
              
              # 2. Verificar email del perfil
              person_res = supabase.table('buitres_people').select('email').eq('id', person_id).single().execute()
@@ -3373,6 +3411,9 @@ def add_buitre_comment(person_id):
         return jsonify({"error": "Debes iniciar sesión para comentar"}), 401
         
     try:
+        # Actualizar actividad del perfil
+        update_buitre_activity(person_id)
+        
         data = request.get_json()
         content = data['content']
         fingerprint = data.get('fingerprint', get_user_fingerprint())
@@ -3397,16 +3438,19 @@ def delete_buitre_comment(comment_id):
         return jsonify({"error": "No autorizado"}), 401
         
     try:
+        # 1. Obtener el comentario para saber el person_id
+        comment_res = supabase.table('buitres_comments').select('person_id').eq('id', comment_id).single().execute()
+        if not comment_res.data:
+            return jsonify({"error": "Comentario no encontrado"}), 404
+        
+        person_id = comment_res.data['person_id']
+        
+        # Actualizar actividad
+        update_buitre_activity(person_id)
+
         if role != 'admin':
              # Verificar si es dueño
              user_email = get_current_user_email()
-             
-             # 1. Obtener el comentario para saber el person_id
-             comment_res = supabase.table('buitres_comments').select('person_id').eq('id', comment_id).single().execute()
-             if not comment_res.data:
-                 return jsonify({"error": "Comentario no encontrado"}), 404
-             
-             person_id = comment_res.data['person_id']
              
              # 2. Verificar email del perfil
              person_res = supabase.table('buitres_people').select('email').eq('id', person_id).single().execute()
@@ -3452,6 +3496,10 @@ def like_buitre_comment(comment_id):
             return jsonify({"error": "Comentario no encontrado"}), 404
         
         comment = comment_query.data[0]
+        
+        # Actualizar actividad del perfil al que pertenece el comentario
+        update_buitre_activity(comment.get('person_id'))
+        
         current_likes = comment.get('likes_count', 0)
         
         if has_liked:
@@ -3522,6 +3570,9 @@ def vote_buitre(person_id):
         return jsonify({"error": "Debes iniciar sesión para votar"}), 401
         
     try:
+        # Actualizar actividad del perfil
+        update_buitre_activity(person_id)
+        
         data = request.get_json()
         vote_type = data['type']
         fingerprint = data.get('fingerprint', get_user_fingerprint())
