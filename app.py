@@ -2948,7 +2948,7 @@ def is_admin_user():
     """Verificar si el usuario actual es admin basado en el JWT - VERSIÓN MEJORADA"""
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        print("No hay token de autorización en is_admin_user")
+        print(f"DEBUG: No valid auth header in is_admin_user. Header: {auth_header}")
         return False
         
     try:
@@ -2957,6 +2957,11 @@ def is_admin_user():
         
         # Verificar si el usuario existe en la base de datos y es admin
         result = supabase.table('admin_users').select('*').eq('id', payload['user_id']).execute()
+        
+        if not result.data:
+            print(f"DEBUG: User not found in admin_users. ID: {payload['user_id']}")
+            return False
+            
         is_admin = bool(result.data)
         # print(f"Verificación admin: {is_admin} para user_id: {payload['user_id']}")
         return is_admin
