@@ -2998,7 +2998,7 @@ def get_buitres_people():
         sort_by = request.args.get('sortBy', 'recent')
         
         table_name = 'buitres_people'
-        if sort_by in ['comments', 'tags']:
+        if sort_by in ['comments', 'tags', 'notes']:
             table_name = 'buitres_stats'
             
         # Construir la base de la consulta
@@ -3035,6 +3035,18 @@ def get_buitres_people():
             result = query.order('comments_count', desc=True).limit(100).execute()
         elif sort_by == 'tags':
             result = query.order('tags_count', desc=True).limit(100).execute()
+        elif sort_by == 'notes':
+            try:
+                result = query.order('notes_count', desc=True).limit(100).execute()
+            except Exception as e:
+                print(f"Warning: notes_count column missing, falling back to created_at. Error: {e}")
+                # Reiniciar query y usar tabla base por si acaso
+                query = supabase.table('buitres_people').select('*').eq('is_merged', False)
+                if search:
+                    words = search.strip().split()
+                    for word in words:
+                        query = query.ilike("name", f"%{word}%")
+                result = query.order('created_at', desc=True).limit(100).execute()
         else:
             result = query.limit(100).execute()
         
@@ -3198,6 +3210,21 @@ def update_buitre_activity(person_id):
         }).eq('id', person_id).execute()
     except Exception as e:
         print(f"Error actualizando actividad: {e}")
+
+def increment_deletion_count(person_id):
+    """Incrementar contador de eliminaciones (Solo si el dueño elimina)"""
+    try:
+        # Usar RPC para incrementar atómicamente si es posible, o lectura-escritura simple
+        # Para simplicidad, haremos lectura-escritura (race conditions son aceptables aquí)
+        res = supabase.table('buitres_people').select('deletions_count').eq('id', person_id).single().execute()
+        current_count = res.data.get('deletions_count', 0) or 0
+        
+        supabase.table('buitres_people').update({
+            'deletions_count': current_count + 1,
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }).eq('id', person_id).execute()
+    except Exception as e:
+        print(f"Error incrementando deletion count: {e}")
 
 @app.route('/api/buitres/people/<person_id>/details', methods=['POST'])
 def add_buitre_detail(person_id):
@@ -3389,6 +3416,9 @@ def delete_buitre_detail(detail_id):
              
              if not person or not person.get('email') or person['email'] != user_email:
                  return jsonify({"error": "No tienes permiso para eliminar etiquetas de este perfil"}), 403
+             
+             # Es dueño, incrementar contador
+             increment_deletion_count(person_id)
 
         supabase.table('buitres_details').delete().eq('id', detail_id).execute()
         return jsonify({"success": True}), 200
@@ -3463,6 +3493,9 @@ def delete_buitre_comment(comment_id):
              
              if not person or not person.get('email') or person['email'] != user_email:
                  return jsonify({"error": "No tienes permiso para eliminar comentarios de este perfil"}), 403
+            
+             # Es dueño, incrementar contador
+             increment_deletion_count(person_id)
 
         supabase.table('buitres_comments').delete().eq('id', comment_id).execute()
         return jsonify({"success": True}), 200
@@ -3701,15 +3734,20 @@ def delete_song_note(note_id):
             is_authorized = True
         
         # b. Es el dueño del perfil?
+        is_owner = False
         if not is_authorized:
             current_email = get_current_user_email()
             if current_email:
                 person_res = supabase.table('buitres_people').select('email').eq('id', person_id).execute()
                 if person_res.data and person_res.data[0].get('email') == current_email:
                     is_authorized = True
+                    is_owner = True
         
         if not is_authorized:
              return jsonify({"error": "No tienes permiso para eliminar esta nota"}), 403
+             
+        if is_owner:
+            increment_deletion_count(person_id)
 
         # 3. Eliminar
         supabase.table('buitres_song_notes').delete().eq('id', note_id).execute()
