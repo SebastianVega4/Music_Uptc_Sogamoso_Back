@@ -3615,6 +3615,108 @@ def merge_buitres():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# === BUITRES SONG NOTES ENDPOINTS ===
+
+@app.route('/api/buitres/people/<person_id>/songs', methods=['GET'])
+def get_person_songs(person_id):
+    """Obtener notas de canciones activas (no expiradas) para una persona"""
+    try:
+        # Fetch songs that haven't expired
+        result = supabase.table('buitres_song_notes')\
+            .select('*')\
+            .eq('person_id', person_id)\
+            .gt('expires_at', datetime.now(timezone.utc).isoformat())\
+            .order('created_at', desc=True)\
+            .execute()
+            
+        return jsonify(result.data), 200
+    except Exception as e:
+        print(f"Error getting song notes: {e}")
+        # If table doesn't exist, return empty list instead of error
+        return jsonify([]), 200
+
+@app.route('/api/buitres/people/<person_id>/songs', methods=['POST'])
+def add_person_song(person_id):
+    """Agregar una nota (canción o texto) a una persona"""
+    # VERIFICAR AUTENTICACIÓN
+    is_authed, role = verify_uptc_auth()
+    if not is_authed:
+        return jsonify({"error": "Debes iniciar sesión con tu cuenta UPTC"}), 401
+        
+    try:
+        data = request.get_json()
+        note_type = data.get('type', 'song')
+        
+        track_data = None
+        dedication = data.get('dedication', '')
+        
+        if note_type == 'song':
+            track_data = data.get('track_data')
+            if not track_data:
+                return jsonify({"error": "Faltan datos de la canción"}), 400
+        else:
+            # Text note
+            if not dedication:
+                return jsonify({"error": "El contenido de la nota no puede estar vacío"}), 400
+            # Store metadata in track_data for text notes
+            track_data = {
+                'type': 'text',
+                'bg_color': data.get('bg_color', 'linear-gradient(45deg, #FF9A9E 0%, #FECFEF 99%, #FECFEF 100%)')
+            }
+            
+        # Calcular fecha de expiración (7 días)
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        
+        note_data = {
+            'person_id': person_id,
+            'track_data': track_data,
+            'dedication': dedication,
+            'expires_at': expires_at,
+            'created_by': get_current_user_email()
+        }
+        
+        result = supabase.table('buitres_song_notes').insert(note_data).execute()
+        return jsonify(result.data[0]), 201
+        
+    except Exception as e:
+        print(f"Error adding song note: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/buitres/songs/<note_id>', methods=['DELETE'])
+def delete_song_note(note_id):
+    """Eliminar una nota (Admin o Dueño del Perfil)"""
+    try:
+        # 1. Obtener la nota para saber de quién es
+        note_res = supabase.table('buitres_song_notes').select('person_id').eq('id', note_id).execute()
+        if not note_res.data:
+            return jsonify({"error": "Nota no encontrada"}), 404
+            
+        person_id = note_res.data[0]['person_id']
+        
+        # 2. Verificar permisos
+        is_authorized = False
+        
+        # a. Es admin?
+        if is_admin_user():
+            is_authorized = True
+        
+        # b. Es el dueño del perfil?
+        if not is_authorized:
+            current_email = get_current_user_email()
+            if current_email:
+                person_res = supabase.table('buitres_people').select('email').eq('id', person_id).execute()
+                if person_res.data and person_res.data[0].get('email') == current_email:
+                    is_authorized = True
+        
+        if not is_authorized:
+             return jsonify({"error": "No tienes permiso para eliminar esta nota"}), 403
+
+        # 3. Eliminar
+        supabase.table('buitres_song_notes').delete().eq('id', note_id).execute()
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 start_token_verification()
 
 if __name__ == '__main__':
