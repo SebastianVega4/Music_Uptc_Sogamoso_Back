@@ -3004,7 +3004,7 @@ def get_buitres_people():
         # Construir la base de la consulta
         query = supabase.table(table_name).select('*').eq('is_merged', False)
         
-        # Aplicar búsqueda si existe
+        # Aplicar búsqueda si existe (Nombre y Email)
         if search:
             words = search.strip().split()
             if words:
@@ -3014,44 +3014,91 @@ def get_buitres_people():
                     for word in words:
                         query = query.ilike("name", f"%{word}%")
 
-        # Aplicar ordenamiento
+        # Ejecutar consulta principal con manejo de errores de ordenamiento
+        people = []
+        try:
+            if sort_by == 'recent':
+                try:
+                    result = query.order('updated_at', desc=True).order('created_at', desc=True).limit(100).execute()
+                except Exception:
+                    # Fallback si updated_at no existe
+                    query = supabase.table(table_name).select('*').eq('is_merged', False)
+                    if search:
+                        words = search.strip().split()
+                        if len(words) == 1:
+                             query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
+                        else:
+                            for word in words:
+                                query = query.ilike("name", f"%{word}%")
+                    result = query.order('created_at', desc=True).limit(100).execute()
+            elif sort_by == 'likes':
+                result = query.order('likes_count', desc=True).limit(100).execute()
+            elif sort_by == 'comments':
+                result = query.order('comments_count', desc=True).limit(100).execute()
+            elif sort_by == 'tags':
+                result = query.order('tags_count', desc=True).limit(100).execute()
+            elif sort_by == 'notes':
+                try:
+                    result = query.order('notes_count', desc=True).limit(100).execute()
+                except Exception:
+                    # Fallback si notes_count no existe
+                    result = query.limit(100).execute()
+            else:
+                result = query.limit(100).execute()
+            
+            people = result.data or []
+        except Exception as e:
+            print(f"Error fetching main results: {e}")
+            people = []
+
+        # --- BÚSQUEDA POR ETIQUETAS (TAGS) ---
+        if search:
+            try:
+                # Buscar IDs en buitres_details que coincidan con la búsqueda
+                tag_query = supabase.table('buitres_details').select('person_id').ilike('content', f'%{search}%').limit(50)
+                tag_res = tag_query.execute()
+                
+                if tag_res.data:
+                    tag_ids = [item['person_id'] for item in tag_res.data]
+                    
+                    # Filtrar IDs que ya tenemos en la lista 'people'
+                    existing_ids = {p['id'] for p in people}
+                    new_ids = [tid for tid in tag_ids if tid not in existing_ids]
+                    
+                    if new_ids:
+                        # Buscar las personas faltantes
+                        try:
+                            tag_people_res = supabase.table(table_name).select('*').in_('id', new_ids).execute()
+                        except:
+                            # Fallback a tabla base si table_name falla
+                            tag_people_res = supabase.table('buitres_people').select('*').in_('id', new_ids).execute()
+                            
+                        if tag_people_res.data:
+                            people.extend(tag_people_res.data)
+            except Exception as e:
+                print(f"Error fetching tag matches: {e}")
+
+        # --- ORDENAMIENTO FINAL EN PYTHON (Merge) ---
+        def get_sort_value(p, key):
+            val = p.get(key)
+            return val if val is not None else 0
+            
+        def get_date_value(p, key):
+            val = p.get(key)
+            return val if val else ''
+
         if sort_by == 'recent':
-            try:
-                # Intentar ordenar por updated_at (actividad reciente)
-                result = query.order('updated_at', desc=True).order('created_at', desc=True).limit(100).execute()
-            except Exception as e:
-                # Fallback a created_at si updated_at falla (columna inexistente)
-                print(f"Fallback a created_at: {e}")
-                # Reiniciar query para evitar error de columna inválida si el cliente guardó el estado
-                query = supabase.table(table_name).select('*').eq('is_merged', False)
-                if search:
-                    words = search.strip().split()
-                    for word in words:
-                        query = query.ilike("name", f"%{word}%")
-                result = query.order('created_at', desc=True).limit(100).execute()
+             people.sort(key=lambda x: (get_date_value(x, 'updated_at'), get_date_value(x, 'created_at')), reverse=True)
         elif sort_by == 'likes':
-            result = query.order('likes_count', desc=True).limit(100).execute()
+             people.sort(key=lambda x: get_sort_value(x, 'likes_count'), reverse=True)
         elif sort_by == 'comments':
-            result = query.order('comments_count', desc=True).limit(100).execute()
+             people.sort(key=lambda x: get_sort_value(x, 'comments_count'), reverse=True)
         elif sort_by == 'tags':
-            result = query.order('tags_count', desc=True).limit(100).execute()
+             people.sort(key=lambda x: get_sort_value(x, 'tags_count'), reverse=True)
         elif sort_by == 'notes':
-            try:
-                result = query.order('notes_count', desc=True).limit(100).execute()
-            except Exception as e:
-                print(f"Warning: notes_count column missing, falling back to created_at. Error: {e}")
-                # Reiniciar query y usar tabla base por si acaso
-                query = supabase.table('buitres_people').select('*').eq('is_merged', False)
-                if search:
-                    words = search.strip().split()
-                    for word in words:
-                        query = query.ilike("name", f"%{word}%")
-                result = query.order('created_at', desc=True).limit(100).execute()
-        else:
-            result = query.limit(100).execute()
+             people.sort(key=lambda x: get_sort_value(x, 'notes_count'), reverse=True)
         
         # ELIMINAR CORREOS SI NO ES ADMIN
-        people = result.data
         if role != 'admin':
             for person in people:
                 person['email'] = None
