@@ -2656,39 +2656,71 @@ def delete_chat_message(message_id):
         print(f"Error eliminando mensaje: {e}")
         return jsonify({"error": str(e)}), 500
 
+# Global variable for in-memory online users fallback
+online_users_memory = {}
+
+@app.route('/api/chat/heartbeat', methods=['POST', 'OPTIONS'])
+def chat_heartbeat():
+    """Registrar latido de usuario para estado online"""
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        room = data.get('room', 'general')
+        
+        if not user_id:
+            return jsonify({"error": "User ID required"}), 400
+            
+        current_time = datetime.now(timezone.utc).timestamp()
+        
+        if redis_client:
+            # Usar Redis para almacenar presencia (expira en 130s -> 2 min + margen)
+            redis_client.setex(f"presence:{room}:{user_id}", 130, str(current_time))
+        else:
+            # Fallback en memoria
+            if room not in online_users_memory:
+                online_users_memory[room] = {}
+            online_users_memory[room][user_id] = current_time
+            
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        print(f"Error en heartbeat: {e}")
+        return jsonify({"error": "Error registering heartbeat"}), 500
+
 @app.route('/api/chat/online-users', methods=['GET'])
 def get_online_users():
-    """Obtener usuarios online - VERSIÓN MEJORADA"""
+    """Obtener usuarios online basado en heartbeats"""
     try:
         room = request.args.get('room', 'general')
-        current_time = datetime.now(timezone.utc)
+        current_time = datetime.now(timezone.utc).timestamp()
+        online_count = 0
         
-        # Calcular usuarios activos en los últimos 2 minutos
-        two_minutes_ago = current_time - timedelta(minutes=2)
-        
-        # Usuarios que han enviado mensajes recientemente
-        recent_users_result = supabase.table('chat_messages')\
-            .select('user_name', count='exact')\
-            .eq('room', room)\
-            .gte('created_at', two_minutes_ago.isoformat())\
-            .execute()
-        
-        # Usuarios que están escribiendo (desde Redis si está disponible)
-        typing_users_count = 0
         if redis_client:
             try:
-                typing_keys = redis_client.keys(f'typing:{room}:*')
-                typing_users_count = len(typing_keys)
-            except Exception as redis_error:
-                print(f'Error obteniendo typing users: {redis_error}')
-        
-        # Calcular estimación de usuarios online
-        unique_recent_users = recent_users_result.count if recent_users_result.count else 0
-        online_count = max(1, unique_recent_users + typing_users_count)
-        
+                # Contar llaves de presencia activas
+                keys = redis_client.keys(f"presence:{room}:*")
+                online_count = len(keys)
+            except Exception as e:
+                print(f"Error Redis online users: {e}")
+                online_count = 0
+        else:
+            # Usar memoria
+            if room in online_users_memory:
+                # Filtrar usuarios activos en los últimos 130s
+                active_users = {
+                    uid: ts for uid, ts in online_users_memory[room].items() 
+                    if current_time - ts < 130
+                }
+                online_users_memory[room] = active_users # Actualizar memoria limpia
+                online_count = len(active_users)
+            
+        # Asegurar al menos 1 (el que consulta debería estar enviando heartbeat)
+        # Si devuelve 0 es que algo falló o es el primer request antes del heartbeat
         return jsonify({
-            'online_users': online_count,
-            'timestamp': current_time.isoformat()
+            'online_users': max(1, online_count),
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }), 200
         
     except Exception as e:
