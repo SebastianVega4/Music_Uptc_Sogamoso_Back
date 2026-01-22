@@ -1725,13 +1725,20 @@ def handle_search():
         results = sp.search(q=query, type='track', limit=10)
         tracks = []
         for track in results['tracks']['items']:
+            preview_url = track['preview_url']
+            
+            # Fallback to iTunes if Spotify preview is not available
+            if not preview_url:
+                artist_name = track['artists'][0]['name'] if track['artists'] else ""
+                preview_url = get_itunes_preview(track['name'], artist_name)
+                
             tracks.append({
                 'id': track['id'],
                 'name': track['name'],
                 'artists': [artist['name'] for artist in track['artists']],
                 'album': track['album']['name'],
                 'image': track['album']['images'][0]['url'] if track['album']['images'] else "https://placehold.co/300x300?text=No+Image",
-                'preview_url': track['preview_url'],
+                'preview_url': preview_url,
                 'duration_ms': track['duration_ms'],
                 'uri': track['uri']
             })
